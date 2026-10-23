@@ -45,9 +45,18 @@ debug:
 	$(MAKE) clean
 	$(MAKE) OPT="-g -O0" all
 
+# gcc cannot emit a compile_commands.json, so let bear intercept a clean build
+# and record the real compiler invocations for clangd. Regenerate after a flake
+# update, when raylib's store path changes.
+compile_commands.json:
+	@command -v bear >/dev/null || \
+		{ echo "run this inside 'nix develop' - bear comes from the dev shell"; exit 1; }
+	$(MAKE) clean
+	bear -- $(MAKE) all
+
 clean:
 	rm -rf $(BUILD) server client
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
-.PHONY: all debug clean
+.PHONY: all debug clean compile_commands.json

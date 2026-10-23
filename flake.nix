@@ -12,6 +12,7 @@
             raylib
             pkg-config
             gnumake
+            bear
           ];
         };
       });
