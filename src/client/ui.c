@@ -316,6 +316,7 @@ void run_ui(ClientState *cs) {
   SetTraceLogLevel(LOG_WARNING);
   InitWindow(800, 800, "CChess");
   SetTargetFPS(60);
+  SetExitKey(KEY_NULL);
 
   load_assets();
   
