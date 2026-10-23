@@ -86,16 +86,9 @@ static void broadcast(Server *s, uint8_t msg_type, const void *msg_buf, uint16_t
   }
 }
 
-static void send_state(int fd, const Game *g) {
-  uint8_t state[STATE_SIZE];
-  pack_state(g, state);
-  send_msg(fd, MSG_STATE, state, STATE_SIZE);
-}
-
 static void broadcast_state(Server *s) {
-  uint8_t state[STATE_SIZE];
-  pack_state(&s->game, state);
-  broadcast(s, MSG_STATE, state, STATE_SIZE);
+  uint8_t buf[MAX_PAYLOAD];
+  broadcast(s, MSG_STATE, buf, encode_state(buf, &s->game));
 }
 
 static void maybe_start(Server *s) {
@@ -138,19 +131,11 @@ static void accept_client(Server *s) {
   s->clients[slot] = (Client){ fd, role, true };
   printf("[%s] connected\n", role_name(role));
 
-  if (role == ROLE_SPECTATOR) {
-    send_msg(fd, MSG_JOIN, NULL, 0);
-  } else {
-    PieceColor color = ROLE_COLOR(role);
-    send_msg(fd, MSG_JOIN, &color, 1);
-  }
+  send_join(fd, role);
 
   if (s->started) {
     send_state(fd, &s->game);
-    if (s->over) {
-      uint8_t msg_buf[2] = { s->result.result, s->result.reason };
-      send_msg(fd, MSG_GAME_OVER, msg_buf, 2);
-    }
+    if (s->over) send_game_over(fd, s->result);
   } else {
     maybe_start(s);
   }
@@ -168,17 +153,17 @@ static uint8_t requirements_for(uint8_t msg_type) {
   return msg_requirements[msg_type];
 }
 
-static GameResult send_reject(Client *c, uint8_t msg_type) {
-  send_msg(c->fd, MSG_REJECTED, &msg_type, 1);
+static GameResult reject(Client *c, uint8_t msg_type) {
+  send_rejected(c->fd, msg_type);
   return NO_RESULT;
 }
 
 static GameResult handle_move(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
-  if (msg_len != 3) return send_reject(c, MSG_MOVE);
+  Move m;
+  if (!decode_move(msg_buf, msg_len, &m)) return reject(c, MSG_MOVE);
 
-  Move m = { msg_buf[0], msg_buf[1], msg_buf[2] };
   if (ROLE_COLOR(c->role) != s->game.turn || !is_legal_move(&s->game, m))
-    return send_reject(c, MSG_MOVE);
+    return reject(c, MSG_MOVE);
 
   apply_move(&s->game, m);
   broadcast_state(s);
@@ -215,7 +200,7 @@ static GameResult handle_msg(Server *s, int i) {
   if (((need & NEEDS_PLAYER) && c->role == ROLE_SPECTATOR) ||
       ((need & NEEDS_GAME) && !s->started) ||
       ((need & NEEDS_LIVE) && s->over)) {
-    return send_reject(c, msg_type);
+    return reject(c, msg_type);
   }
 
   switch (msg_type) {
@@ -233,8 +218,8 @@ static void finish_game(Server *s, GameResult r) {
   s->over = true;
   s->result = r;
 
-  uint8_t msg_buf[2] = { r.result, r.reason };
-  broadcast(s, MSG_GAME_OVER, msg_buf, 2);
+  uint8_t buf[MAX_PAYLOAD];
+  broadcast(s, MSG_GAME_OVER, buf, encode_game_over(buf, r));
   printf("%s by %s\n", winner_name(r), reason_name(r));
 }
 

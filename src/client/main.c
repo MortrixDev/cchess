@@ -20,27 +20,30 @@ void *network_thread(void *arg) {
   while (receive_msg(cs->fd, &msg_type, msg_buf, &msg_len, sizeof msg_buf)) {
     pthread_mutex_lock(&cs->lock);
     switch (msg_type) {
-      case MSG_JOIN:
-        if (msg_len == 1) cs->view.my_color = msg_buf[0];
-        else if (msg_len == 0) cs->view.spectator = true;
-        cs->view.joined = true;
+      case MSG_JOIN: {
+        Role role;
+        if (decode_join(msg_buf, msg_len, &role, &cs->view.my_color)) {
+          cs->view.spectator = role == ROLE_SPECTATOR;
+          cs->view.joined = true;
+        }
         break;
+      }
       case MSG_STATE:
-        if (msg_len == STATE_SIZE) {
-          unpack_state(&cs->view.game, msg_buf);
+        if (decode_state(msg_buf, msg_len, &cs->view.game)) {
           cs->view.has_state = true;
           cs->view.game_over = false;
         }
         break;
-      case MSG_REJECTED:
+      case MSG_REJECTED: {
+        uint8_t rejected;
         fprintf(stderr, "server rejected %s\n",
-                msg_len == 1 ? msg_type_name(msg_buf[0]) : "a message");
+                decode_rejected(msg_buf, msg_len, &rejected) ? msg_type_name(rejected)
+                                                             : "a message");
         break;
+      }
       case MSG_GAME_OVER:
-        if (msg_len == 2) {
-          cs->view.result = (GameResult){ msg_buf[0], msg_buf[1] };
+        if (decode_game_over(msg_buf, msg_len, &cs->view.result))
           cs->view.game_over = true;
-        }
         break;
     }
     pthread_mutex_unlock(&cs->lock);
