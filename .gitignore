@@ -1,5 +1,6 @@
 build/
-server
-client
+.cache/
 compile_commands.json
-.cache
+/server
+/client
+
