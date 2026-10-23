@@ -1,50 +1,20 @@
-#include "common.h"
-#include "gui.h"
- 
-#include <netdb.h>
+#include "client/client.h"
+#include "client/ui.h"
+#include "net/net.h"
+#include "proto/proto.h"
+
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <signal.h>
 
 #define SERVER_HOST "127.0.0.1"
 
-int connect_to(const char *host, int port) {
-  char port_str[8];
-  snprintf(port_str, sizeof port_str, "%d", port);
-
-  struct addrinfo hints = {0}, *res, *rp;
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-
-  if (getaddrinfo(host, port_str, &hints, &res) != 0) return -1;
-
-  int fd = -1;
-  for (rp = res; rp; rp = rp->ai_next) {
-    fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (fd < 0) continue;
-    if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
-    close(fd);
-    fd = -1;
-  }
-  freeaddrinfo(res);
-  return fd;
-}
-
-bool send_move(int fd, Move m) {
-  uint8_t payload[3] = { m.from, m.to, m.promotion };
-  return send_msg(fd, MSG_MOVE, payload, 3);
-}
-
-bool send_resign(int fd) {
-  return send_msg(fd, MSG_RESIGN, NULL, 0);
-}
-
 void *network_thread(void *arg) {
   ClientState *cs = arg;
-  uint8_t msg_type, msg_buf[STATE_SIZE];
+  uint8_t msg_type, msg_buf[MAX_PAYLOAD];
   uint16_t msg_len;
 
   while (receive_msg(cs->fd, &msg_type, msg_buf, &msg_len, sizeof msg_buf)) {
@@ -102,7 +72,7 @@ int main(void) {
     exit(EXIT_FAILURE);
   }
 
-  run_gui(&cs);
+  run_ui(&cs);
 
   shutdown(cs.fd, SHUT_RDWR);
   pthread_join(net, NULL);

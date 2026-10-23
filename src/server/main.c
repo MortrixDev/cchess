@@ -1,13 +1,14 @@
-#include "common.h"
-#include "rules.h"
- 
+#include "chess/board.h"
+#include "chess/movegen.h"
+#include "chess/rules.h"
+#include "net/net.h"
+#include "proto/proto.h"
+
+#include <poll.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <signal.h>
-#include <poll.h>
 #include <unistd.h>
 
 #define MAX_SPECTATORS 10
@@ -77,25 +78,6 @@ static const char *winner_name(GameResult r) {
   return "game over";
 }
 
-static void init_game(Game *g) {
-  static const Piece back_rank[8] = { ROOK, KNIGHT, BISHOP, QUEEN, KING, BISHOP, KNIGHT, ROOK };
-  *g = (Game){0};
-
-  for (int file = 0; file < 8; file++) {
-    g->board[file] = back_rank[file] | COLOR_WHITE;
-    g->board[8 + file] = PAWN | COLOR_WHITE;
-    g->board[48 + file] = PAWN | COLOR_BLACK;
-    g->board[56 + file] = back_rank[file] | COLOR_BLACK;
-  }
-
-  g->turn = COLOR_WHITE;
-  g->can_castle[0][0] = true;
-  g->can_castle[1][0] = true;
-  g->can_castle[0][1] = true;
-  g->can_castle[1][1] = true;
-  g->en_passant_square = NO_SQUARE;
-}
-
 static void broadcast(Server *s, uint8_t msg_type, const void *msg_buf, uint16_t msg_len) {
   for (int i = 0; i < MAX_CLIENTS; i++) {
     if (s->clients[i].active) {
@@ -118,7 +100,7 @@ static void broadcast_state(Server *s) {
 
 static void maybe_start(Server *s) {
   if (s->started || !has_role(s, ROLE_WHITE) || !has_role(s, ROLE_BLACK)) return;
-  init_game(&s->game);
+  init_board(&s->game);
   s->started = true;
   broadcast_state(s);
 }
@@ -129,7 +111,7 @@ static void remove_client(Server *s, int i) {
 }
 
 static void accept_client(Server *s) {
-  int fd = accept(s->listen_fd, NULL, NULL);
+  int fd = accept_conn(s->listen_fd);
   if (fd < 0) return;
 
   Role role;
@@ -222,7 +204,7 @@ static GameResult handle_disconnect(Server *s, int i) {
 
 static GameResult handle_msg(Server *s, int i) {
   Client *c = &s->clients[i];
-  uint8_t msg_type, msg_buf[16];
+  uint8_t msg_type, msg_buf[MAX_PAYLOAD];
   uint16_t msg_len;
 
   if (!receive_msg(c->fd, &msg_type, msg_buf, &msg_len, sizeof msg_buf)) {
@@ -294,35 +276,12 @@ void run_server(Server *s) {
 
 int main(void) {
   Server s = {0};
-  int opt = 1;
-  struct sockaddr_in listen_address = {0};
 
   // Prevents the program to crash when a player disconnects
   signal(SIGPIPE, SIG_IGN);
 
-  if ((s.listen_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    perror("socket failed");
-    exit(EXIT_FAILURE);
-  }
-
-  if (setsockopt(s.listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-    perror("setsockopt");
-    exit(EXIT_FAILURE);
-  }
-
-  listen_address.sin_family = AF_INET;
-  listen_address.sin_addr.s_addr = INADDR_ANY;
-  listen_address.sin_port = htons(PORT);
-
-  if (bind(s.listen_fd, (struct sockaddr *)&listen_address, sizeof(listen_address)) < 0) {
-    perror("bind failed");
-    exit(EXIT_FAILURE);
-  }
-
-  if (listen(s.listen_fd, MAX_CLIENTS) < 0) {
-    perror("listen");
-    exit(EXIT_FAILURE);
-  }
+  s.listen_fd = listen_on(PORT, MAX_CLIENTS);
+  if (s.listen_fd < 0) exit(EXIT_FAILURE);
 
   printf("Server running...\n");
   run_server(&s);

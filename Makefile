@@ -1,31 +1,53 @@
 CC = gcc
 WARNINGS = -Wall -Wextra
 STD = -std=gnu99
-CFLAGS = $(WARNINGS) $(STD) -O2
-CLIENT_LIBS = -pthread $(shell pkg-config --libs raylib)
-CLIENT_CFLAGS = $(shell pkg-config --cflags raylib)
+OPT = -O2
+CFLAGS = $(WARNINGS) $(STD) $(OPT) -I$(SRC)
+DEPFLAGS = -MMD -MP
+
+RAYLIB_CFLAGS = $(shell pkg-config --cflags raylib)
+RAYLIB_LIBS = $(shell pkg-config --libs raylib)
 
 SRC = src
+BUILD = build
 
-SERVER_SRCS = $(SRC)/server.c $(SRC)/rules.c $(SRC)/common.c
-SERVER_HDRS = $(SRC)/common.h $(SRC)/rules.h
+SHARED_SRCS = \
+	$(SRC)/chess/board.c \
+	$(SRC)/chess/movegen.c \
+	$(SRC)/chess/rules.c \
+	$(SRC)/proto/proto.c \
+	$(SRC)/net/net.c
 
-CLIENT_SRCS = $(SRC)/client.c $(SRC)/gui.c $(SRC)/rules.c $(SRC)/common.c
-CLIENT_HDRS = $(SRC)/client.h $(SRC)/gui.h $(SRC)/common.h $(SRC)/rules.h
+SERVER_SRCS = $(SHARED_SRCS) $(SRC)/server/main.c
+CLIENT_SRCS = $(SHARED_SRCS) $(SRC)/client/main.c $(SRC)/client/ui.c
+
+SERVER_OBJS = $(SERVER_SRCS:$(SRC)/%.c=$(BUILD)/%.o)
+CLIENT_OBJS = $(CLIENT_SRCS:$(SRC)/%.c=$(BUILD)/%.o)
 
 all: server client
 
-server: $(SERVER_SRCS) $(SERVER_HDRS)
-	$(CC) $(CFLAGS) -o $@ $(SERVER_SRCS)
+server: $(SERVER_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^
 
-client: $(CLIENT_SRCS) $(CLIENT_HDRS)
-	$(CC) $(CFLAGS) $(CLIENT_CFLAGS) -o $@ $(CLIENT_SRCS) $(CLIENT_LIBS)
+client: $(CLIENT_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ -pthread $(RAYLIB_LIBS)
+
+# The client talks to raylib; everything else is plain C.
+$(BUILD)/client/%.o: $(SRC)/client/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(RAYLIB_CFLAGS) $(DEPFLAGS) -pthread -c $< -o $@
+
+$(BUILD)/%.o: $(SRC)/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 debug:
 	$(MAKE) clean
-	$(MAKE) CFLAGS="$(WARNINGS) $(STD) -g -O0" all
+	$(MAKE) OPT="-g -O0" all
 
 clean:
-	rm -f server client
+	rm -rf $(BUILD) server client
+
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 .PHONY: all debug clean

@@ -1,19 +1,11 @@
-#include "rules.h"
-#include "common.h"
+#include "chess/movegen.h"
+#include "chess/board.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #define COUNT(a) ((int)(sizeof (a) / sizeof (a)[0]))
 
-// can_castle[color][side]
-enum { CASTLE_KING = 0, CASTLE_QUEEN = 1 };
-
 static const Piece PROMO_PIECES[4] = { QUEEN, ROOK, BISHOP, KNIGHT };
-
-typedef struct {
-  int dir_rank, dir_file;
-} Dir;
 
 
 static const Dir KNIGHT_DIRS[8] = {
@@ -28,40 +20,6 @@ static const Dir ALL_DIRS[8] = {
 
 static const Dir ROOK_DIRS[4]   = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
 static const Dir BISHOP_DIRS[4] = { { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
-
-static inline int rank_of(int sq) { return sq >> 3; }
-static inline int file_of(int sq) { return sq & 7; }
-
-static inline bool on_board(int sq) {
-  return (unsigned)sq < 64;
-}
-
-static inline int square_of(int rank, int file) {
-  return rank * 8 + file;
-}
-
-// One step from sq in direction d, or -1 if that leaves the board.
-static inline int step(int sq, Dir d) {
-  int rank = rank_of(sq) + d.dir_rank;
-  int file = file_of(sq) + d.dir_file;
-  if ((unsigned)rank >= 8 || (unsigned)file >= 8) return -1;
-  return square_of(rank, file);
-}
-
-// Rank delta of a single pawn push for color.
-static inline int pawn_dir(PieceColor color) {
-  return color == COLOR_WHITE ? 1 : -1;
-}
-
-// Rank a pawn starts on, where a double push is still available.
-static inline int pawn_start_rank(PieceColor color) {
-  return color == COLOR_WHITE ? 1 : 6;
-}
-
-// Rank a pawn promotes on.
-static inline int promotion_rank(PieceColor color) {
-  return color == COLOR_WHITE ? 7 : 0;
-}
 
 static inline int find_king(const Game *g, PieceColor color) {
   for (int sq = 0; sq < 64; sq++) {
@@ -270,107 +228,4 @@ int generate_legal_destinations(const Game *g, int from, bool targets[64]) {
   }
 
   return n;
-}
-
-static void revoke_rook_right(Game *g, int sq) {
-  switch (sq) {
-    case 0:  g->can_castle[COLOR_INDEX(COLOR_WHITE)][CASTLE_QUEEN] = false; break;
-    case 7:  g->can_castle[COLOR_INDEX(COLOR_WHITE)][CASTLE_KING]  = false; break;
-    case 56: g->can_castle[COLOR_INDEX(COLOR_BLACK)][CASTLE_QUEEN] = false; break;
-    case 63: g->can_castle[COLOR_INDEX(COLOR_BLACK)][CASTLE_KING]  = false; break;
-  }
-}
-
-void apply_move(Game *g, Move m) {
-  Piece p = g->board[m.from];
-  PieceColor color = COLOR(p);
-  int type = TYPE(p);
-  bool capture = !IS_EMPTY(g->board[m.to]);
-
-  if (type == PAWN && m.to == g->en_passant_square && file_of(m.to) != file_of(m.from)) {
-    g->board[square_of(rank_of(m.to) - pawn_dir(color), file_of(m.to))] = EMPTY;
-    capture = true;
-  }
-
-  g->board[m.to] = p;
-  g->board[m.from] = EMPTY;
-
-  if (type == PAWN && rank_of(m.to) == promotion_rank(color)) {
-    int promo = TYPE(m.promotion);
-    if (promo != QUEEN && promo != ROOK && promo != BISHOP && promo != KNIGHT) promo = QUEEN;
-    g->board[m.to] = promo | color;
-  }
-
-  if (type == KING && abs(file_of(m.to) - file_of(m.from)) == 2) {
-    int home = rank_of(m.from);
-    bool kingside = file_of(m.to) == 6;
-    int rook_from = square_of(home, kingside ? 7 : 0);
-    int rook_to   = square_of(home, kingside ? 5 : 3);
-    g->board[rook_to] = g->board[rook_from];
-    g->board[rook_from] = EMPTY;
-  }
-
-  if (type == KING) {
-    g->can_castle[COLOR_INDEX(color)][CASTLE_KING] = false;
-    g->can_castle[COLOR_INDEX(color)][CASTLE_QUEEN] = false;
-  }
-  revoke_rook_right(g, m.from);
-  revoke_rook_right(g, m.to);
-
-  g->en_passant_square = NO_SQUARE;
-  if (type == PAWN && abs(rank_of(m.to) - rank_of(m.from)) == 2)
-    g->en_passant_square = square_of(rank_of(m.from) + pawn_dir(color), file_of(m.from));
-
-  if (type == PAWN || capture) g->halfmove_clock = 0;
-  else g->halfmove_clock++;
-
-  if (color == COLOR_BLACK) g->fullmove_number++;
-
-  g->turn = OTHER_COLOR(g->turn);
-}
-
-static bool is_insufficient_material(const Game *g) {
-  int minors[2] = { 0, 0 };
-  int bishop_shade[2] = { -1, -1 };
-  int bishops = 0;
-
-  for (int sq = 0; sq < 64; sq++) {
-    Piece p = g->board[sq];
-    if (IS_EMPTY(p) || TYPE(p) == KING) continue;
-
-    int type = TYPE(p);
-    if (type == PAWN || type == ROOK || type == QUEEN) return false;
-
-    int ci = COLOR_INDEX(COLOR(p));
-    minors[ci]++;
-    if (type == BISHOP) {
-      bishops++;
-      bishop_shade[ci] = (rank_of(sq) + file_of(sq)) % 2;
-    }
-  }
-
-  int total = minors[0] + minors[1];
-  if (total <= 1) return true;
-
-  return total == 2 && bishops == 2 &&
-         minors[0] == 1 && minors[1] == 1 &&
-         bishop_shade[0] == bishop_shade[1];
-}
-
-GameResult game_status(const Game *g) {
-  Move moves[MAX_LEGAL_MOVES];
-
-  if (generate_legal_moves(g, moves) == 0) {
-    if (in_check(g, g->turn))
-      return (GameResult){ WIN_FOR(OTHER_COLOR(g->turn)), REASON_CHECKMATE };
-    return (GameResult){ RESULT_DRAW, REASON_STALEMATE };
-  }
-
-  if (g->halfmove_clock >= 100)
-    return (GameResult){ RESULT_DRAW, REASON_FIFTY_MOVES };
-
-  if (is_insufficient_material(g))
-    return (GameResult){ RESULT_DRAW, REASON_INSUFFICIENT_MATERIAL };
-
-  return NO_RESULT;
 }

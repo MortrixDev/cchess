@@ -1,8 +1,11 @@
-#ifndef CLIENT_H
-#define CLIENT_H
+#ifndef CLIENT_CLIENT_H
+#define CLIENT_CLIENT_H
 
-#include "common.h"
+#include "chess/board.h"
+#include "chess/rules.h"
+
 #include <pthread.h>
+#include <stdbool.h>
 
 typedef struct View {
   bool connected;
@@ -20,8 +23,5 @@ typedef struct ClientState {
   int fd;
   View view;
 } ClientState;
-
-bool send_move(int fd, Move m);
-bool send_resign(int fd);
 
 #endif

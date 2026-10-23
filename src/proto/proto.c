@@ -1,36 +1,7 @@
-#include "common.h"
+#include "proto/proto.h"
+#include "net/net.h"
 
-#include <errno.h>
 #include <string.h>
-#include <unistd.h>
-
-static bool read_full(int fd, void *buf, size_t n) {
-  uint8_t *p = buf;
-  while (n > 0) {
-    ssize_t r = read(fd, p, n);
-    if (r < 0 && errno == EINTR)
-        continue;
-    if (r <= 0)
-        return false;
-    p += r;
-    n -= r;
-  }
-  return true;
-}
-
-static bool write_full(int fd, const void *buf, size_t n) {
-  const uint8_t *p = buf;
-  while (n > 0) {
-    ssize_t w = write(fd, p, n);
-    if (w < 0 && errno == EINTR)
-        continue;
-    if (w <= 0)
-        return false;
-    p += w;
-    n -= w;
-  }
-  return true;
-}
 
 const char *msg_type_name(uint8_t msg_type) {
   static const char *names[] = {
@@ -85,4 +56,13 @@ void unpack_state(Game *g, const uint8_t *in) {
   g->en_passant_square = in[69];
   g->halfmove_clock = in[70];
   g->fullmove_number = (in[71] << 8) | in[72];
+}
+
+bool send_move(int fd, Move m) {
+  uint8_t payload[3] = { m.from, m.to, m.promotion };
+  return send_msg(fd, MSG_MOVE, payload, 3);
+}
+
+bool send_resign(int fd) {
+  return send_msg(fd, MSG_RESIGN, NULL, 0);
 }

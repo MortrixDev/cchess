@@ -1,7 +1,9 @@
-#include "gui.h"
-#include "client.h"
-#include "common.h"
-#include "rules.h"
+#include "client/ui.h"
+#include "chess/board.h"
+#include "chess/movegen.h"
+#include "chess/rules.h"
+#include "client/client.h"
+#include "proto/proto.h"
 
 #include <raylib.h>
 
@@ -309,7 +311,7 @@ static void render(View *v, Layout *l, const Input *in) {
   EndDrawing();
 }
 
-void run_gui(ClientState *cs) {
+void run_ui(ClientState *cs) {
   SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT);
   SetTraceLogLevel(LOG_WARNING);
   InitWindow(800, 800, "CChess");
