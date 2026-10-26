@@ -18,6 +18,7 @@ typedef struct {
   int fd;
   Role role;
   bool active;
+  MsgNeeds reached;
 } Client;
 
 typedef struct {
@@ -115,7 +116,7 @@ static void accept_client(Server *s) {
   else if (count_role(s, ROLE_SPECTATOR) < MAX_SPECTATORS){
     role = ROLE_SPECTATOR;
   } else {
-    printf("connection rejected: server full\n");
+    send_error(fd, ERR_SERVER_FULL, 0);
     close(fd);
     return;
   }
@@ -128,44 +129,69 @@ static void accept_client(Server *s) {
     close(fd);
     return;
   }
-  s->clients[slot] = (Client){ fd, role, true };
+  s->clients[slot] = (Client){
+    .fd = fd,
+    .role = role,
+    .active = true,
+    .reached = NEEDS_NOTHING
+  };
   printf("[%s] connected\n", role_name(role));
+}
 
-  send_join(fd, role);
+static ErrorCode check_msg(const Server *s, const Client *c, const MsgSpec *spec, uint16_t len) {
+  if (spec == NULL || spec->dir != DIR_C2S) return ERR_UNKNOWN_MESSAGE;
+  if (len < spec->min_len || len > spec->max_len) return ERR_MALFORMED;
+
+  // NEEDS_LIVE is about the game, so a connection can climb no higher than NEEDS_SEAT
+  MsgNeeds conn_level = spec->needs > NEEDS_SEAT ? NEEDS_SEAT : spec->needs;
+  if (conn_level > c->reached) {
+    switch (c->reached) {
+      case NEEDS_NOTHING: return ERR_NEED_HELLO;
+      case NEEDS_ROOM:  return ERR_NOT_IN_ROOM;
+      default:          return ERR_NOT_A_PLAYER;
+    }
+  }
+
+  if (spec->needs == NEEDS_LIVE) {
+    if (!s->started) return ERR_GAME_NOT_STARTED;
+    if (s->over)     return ERR_GAME_FINISHED;
+  }
+
+  return ERR_NONE;
+}
+
+static GameResult fail(Client *c, ErrorCode code, uint8_t context) {
+  send_error(c->fd, code, context);
+  return NO_RESULT;
+}
+
+static GameResult handle_hello(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
+  uint16_t version;
+  if (!decode_hello(msg_buf, msg_len, &version)) return fail(c, ERR_MALFORMED, MSG_HELLO);
+  if (version != PROTO_VERSION) return fail(c, ERR_VERSION_MISMATCH, MSG_HELLO);
+
+  c->reached = c->role == ROLE_SPECTATOR ? NEEDS_ROOM : NEEDS_SEAT;
+  send_hello_ok(c->fd, MAX_SPECTATORS, 0);
+
+  static const uint8_t no_token[TOKEN_SIZE] = {0};
+  send_joined(c->fd, "------", c->role, no_token, 0);
 
   if (s->started) {
-    send_state(fd, &s->game);
-    if (s->over) send_game_over(fd, s->result);
+    send_state(c->fd, &s->game);
+    if (s->over) send_game_over(c->fd, s->result);
   } else {
     maybe_start(s);
   }
-}
-
-enum { NEEDS_PLAYER = 1 << 0, NEEDS_GAME = 1 << 1, NEEDS_LIVE = 1 << 2 };
-
-static const uint8_t msg_requirements[] = {
-  [MSG_MOVE]   = NEEDS_PLAYER | NEEDS_GAME | NEEDS_LIVE,
-  [MSG_RESIGN] = NEEDS_PLAYER | NEEDS_GAME | NEEDS_LIVE,
-};
-
-static uint8_t requirements_for(uint8_t msg_type) {
-  if (msg_type >= sizeof msg_requirements) return 0; // unknown: default case ignores it
-  return msg_requirements[msg_type];
-}
-
-static GameResult reject(Client *c, uint8_t msg_type) {
-  send_rejected(c->fd, msg_type);
   return NO_RESULT;
 }
 
 static GameResult handle_move(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
-  Move m;
-  if (!decode_move(msg_buf, msg_len, &m)) return reject(c, MSG_MOVE);
+  Move move;
+  if (!decode_move(msg_buf, msg_len, &move)) return fail(c, ERR_MALFORMED, MSG_MOVE);
+  if (ROLE_COLOR(c->role) != s->game.turn)   return fail(c, ERR_NOT_YOUR_TURN, MSG_MOVE);
+  if (!is_legal_move(&s->game, move))        return fail(c, ERR_ILLEGAL_MOVE, MSG_MOVE);
 
-  if (ROLE_COLOR(c->role) != s->game.turn || !is_legal_move(&s->game, m))
-    return reject(c, MSG_MOVE);
-
-  apply_move(&s->game, m);
+  apply_move(&s->game, move);
   broadcast_state(s);
 
   return game_status(&s->game);
@@ -196,17 +222,15 @@ static GameResult handle_msg(Server *s, int i) {
     return handle_disconnect(s, i);
   }
 
-  uint8_t need = requirements_for(msg_type);
-  if (((need & NEEDS_PLAYER) && c->role == ROLE_SPECTATOR) ||
-      ((need & NEEDS_GAME) && !s->started) ||
-      ((need & NEEDS_LIVE) && s->over)) {
-    return reject(c, msg_type);
-  }
-
+  const MsgSpec *spec = msg_spec(msg_type);
+  ErrorCode err = check_msg(s, c, spec, msg_len);
+  if (err != ERR_NONE) return fail(c, err, msg_type);
+  
   switch (msg_type) {
+    case MSG_HELLO:  return handle_hello(s, c, msg_buf, msg_len);
     case MSG_MOVE:   return handle_move(s, c, msg_buf, msg_len);
     case MSG_RESIGN: return handle_resign(s, c);
-    default:         return NO_RESULT;
+    default:         return fail(c, ERR_UNKNOWN_MESSAGE, msg_type);
   }
 }
 
@@ -260,6 +284,8 @@ void run_server(Server *s) {
 }
 
 int main(void) {
+  if (!proto_self_check()) exit(EXIT_FAILURE);
+
   Server s = {0};
 
   // Prevents the program to crash when a player disconnects

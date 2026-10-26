@@ -5,6 +5,7 @@
 
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -20,10 +21,28 @@ void *network_thread(void *arg) {
   while (receive_msg(cs->fd, &msg_type, msg_buf, &msg_len, sizeof msg_buf)) {
     pthread_mutex_lock(&cs->lock);
     switch (msg_type) {
-      case MSG_JOIN: {
+      case MSG_HELLO_OK: {
+          uint16_t version, grace_secs;
+          uint8_t max_spectators;
+          if (!decode_hello_ok(msg_buf, msg_len, &version, &max_spectators, &grace_secs)) {
+            break;
+          }
+
+          if (version != PROTO_VERSION) {
+            cs->view.error_code = ERR_VERSION_MISMATCH;
+            cs->view.error_context = MSG_HELLO_OK;
+            break;
+          }
+          cs->view.grace_secs = grace_secs;
+          break;
+        }
+        break;
+      case MSG_JOINED: {
         Role role;
-        if (decode_join(msg_buf, msg_len, &role, &cs->view.my_color)) {
+        uint8_t flags;
+        if (decode_joined(msg_buf, msg_len, cs->view.room_id, &role, cs->token, &flags)) {
           cs->view.spectator = role == ROLE_SPECTATOR;
+          if (!cs->view.spectator) cs->view.my_color = ROLE_COLOR(role);
           cs->view.joined = true;
         }
         break;
@@ -34,11 +53,12 @@ void *network_thread(void *arg) {
           cs->view.game_over = false;
         }
         break;
-      case MSG_REJECTED: {
-        uint8_t rejected;
-        fprintf(stderr, "server rejected %s\n",
-                decode_rejected(msg_buf, msg_len, &rejected) ? msg_type_name(rejected)
-                                                             : "a message");
+      case MSG_ERROR: {
+          uint8_t code, context;
+          if (decode_error(msg_buf, msg_len, &code, &context)) {
+            cs->view.error_code = code;
+            cs->view.error_context = context;
+          }
         break;
       }
       case MSG_GAME_OVER:
@@ -68,6 +88,7 @@ int main(void) {
     exit(EXIT_FAILURE);
   }
   cs.view.connected = true;
+  send_hello(cs.fd);
 
   pthread_t net;
   if (pthread_create(&net, NULL, network_thread, &cs) != 0) {

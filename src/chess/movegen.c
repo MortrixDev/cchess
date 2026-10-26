@@ -1,9 +1,8 @@
 #include "chess/movegen.h"
 #include "chess/board.h"
+#include "util/util.h"
 
 #include <string.h>
-
-#define COUNT(a) ((int)(sizeof (a) / sizeof (a)[0]))
 
 static const Piece PROMO_PIECES[4] = { QUEEN, ROOK, BISHOP, KNIGHT };
 
