@@ -18,7 +18,10 @@ SHARED_SRCS = \
 	$(SRC)/proto/proto.c \
 	$(SRC)/net/net.c
 
-SERVER_SRCS = $(SHARED_SRCS) $(SRC)/server/main.c
+SERVER_SRCS = $(SHARED_SRCS) \
+	$(SRC)/server/main.c \
+	$(SRC)/server/server.c \
+	$(SRC)/server/room.c
 CLIENT_SRCS = $(SHARED_SRCS) $(SRC)/client/main.c $(SRC)/client/ui.c
 
 SERVER_OBJS = $(SERVER_SRCS:$(SRC)/%.c=$(BUILD)/%.o)
