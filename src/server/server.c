@@ -16,6 +16,8 @@
 
 static const uint8_t NO_TOKEN[TOKEN_SIZE] = { 0 };
 
+// --- Queries -------------------------------------------------------------------------------------
+
 static Room *client_room(Server *s, const Client *c) {
   return &s->room_table.rooms[c->room];
 }
@@ -51,6 +53,8 @@ static int count_role(const Server *s, int room, Role role) {
   }
   return n;
 }
+
+// --- Names ---------------------------------------------------------------------------------------
 
 static const char *role_name(Role role) {
   switch (role) {
@@ -96,10 +100,118 @@ static const char *winner_name(GameResult r) {
   }
 }
 
-static GameResult fail(Client *c, ErrorCode code, uint8_t context) {
-  send_error(c->fd, code, context);
-  return NO_RESULT;
+// --- Connections ---------------------------------------------------------------------------------
+
+static void accept_client(Server *s) {
+  int fd = accept_conn(s->listen_fd);
+  if (fd < 0) {
+    return;
+  }
+
+  int slot = -1;
+  for (int i = 0; i < MAX_CLIENTS && slot < 0; i++) {
+    if (!s->clients[i].active) {
+      slot = i;
+    }
+  }
+  if (slot < 0) {
+    send_error(fd, ERR_SERVER_FULL, 0);
+    close(fd);
+    return;
+  }
+
+  s->clients[slot] = (Client){ .fd = fd, .active = true, .reached = NEEDS_NOTHING, .room = -1 };
+  printf("connected\n");
 }
+
+static void remove_client(Server *s, int i) {
+  close(s->clients[i].fd);
+  s->clients[i].active = false;
+}
+
+// --- Broadcast -----------------------------------------------------------------------------------
+
+static void broadcast(Server *s, int room, uint8_t msg_type, const void *msg_buf,
+                      uint16_t msg_len) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (s->clients[i].active && s->clients[i].room == room) {
+      send_msg(s->clients[i].fd, msg_type, msg_buf, msg_len);
+    }
+  }
+}
+
+static void broadcast_except(Server *s, int room, const Client *skip, uint8_t msg_type,
+                             const void *msg_buf, uint16_t msg_len) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    Client *c = &s->clients[i];
+    if (c->active && c->room == room && c != skip) {
+      send_msg(c->fd, msg_type, msg_buf, msg_len);
+    }
+  }
+}
+
+static void broadcast_state(Server *s, int room) {
+  uint8_t buf[MAX_PAYLOAD];
+  broadcast(s, room, MSG_STATE, buf, encode_state(buf, &s->room_table.rooms[room].game));
+}
+
+// --- Room lifecycle ------------------------------------------------------------------------------
+
+static void maybe_start(Server *s, int room) {
+  if (!has_role(s, room, ROLE_WHITE) || !has_role(s, room, ROLE_BLACK)) {
+    return;
+  }
+  if (!room_start(&s->room_table.rooms[room])) {
+    return;
+  }
+  broadcast_state(s, room);
+}
+
+static bool free_if_quiet(Server *s, int room) {
+  Room *r = &s->room_table.rooms[room];
+  if (r->seats[ROLE_WHITE].claimed || r->seats[ROLE_BLACK].claimed) {
+    return false;
+  }
+  if (!room_empty(s, room)) {
+    return false;
+  }
+
+  printf("[%s] closed\n", r->id);
+  room_free(r);
+  return true;
+}
+
+// Records the first result the game produces and announces it. Later results
+// are ignored: the finished position stands.
+static void finish_game(Server *s, int room, GameResult result) {
+  Room *r = &s->room_table.rooms[room];
+  if (!room_finish(r, result)) {
+    return;
+  }
+
+  uint8_t buf[MAX_PAYLOAD];
+  broadcast(s, room, MSG_GAME_OVER, buf, encode_game_over(buf, result));
+  printf("[%s] %s by %s\n", r->id, winner_name(result), reason_name(result));
+}
+
+static void expire_seat(Server *s, int room, Role role) {
+  Room *r = &s->room_table.rooms[room];
+  bool live = r->started && !r->over;
+
+  room_release_seat(r, role);
+
+  uint8_t buf[MAX_PAYLOAD];
+  broadcast(s, room, MSG_PEER_LEFT, buf, encode_peer(buf, role));
+  printf("[%s] %s did not come back\n", r->id, role_name(role));
+
+  if (live) {
+    finish_game(s, room, (GameResult){ WIN_FOR(OTHER_COLOR(ROLE_COLOR(role))), REASON_DISCONNECT });
+  }
+
+  free_if_quiet(s, room);
+}
+
+// --- Seating -------------------------------------------------------------------------------------
 
 static ErrorCode seat_creator(Client *c, Room *r, int room) {
   int prefer = ROOM_PREFER(r->flags);
@@ -145,50 +257,99 @@ static ErrorCode seat_joiner(Server *s, Client *c, Room *r, int room, bool as_sp
   return ERR_NONE;
 }
 
-// Milliseconds until the nearest grace expiry, or -1 to block. Recomputed from
-// an absolute deadline each time, so a spurious wakeup cannot make it drift.
-static int poll_timeout_ms(const Server *s) {
-  int64_t at = room_table_next_expiry(&s->room_table);
-  if (at < 0) {
-    return -1;
+static ErrorCode reclaim_seat(Server *s, Client *c, Room *r, int room, Role role) {
+  if (!room_claim_seat(r, role)) {
+    return ERR_INTERNAL;
   }
 
-  int64_t wait = at - now_ms();
-  return wait > 0 ? (int)wait : 0;
-}
-
-static void broadcast(Server *s, int room, uint8_t msg_type, const void *msg_buf,
-                      uint16_t msg_len) {
   for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (s->clients[i].active && s->clients[i].room == room) {
-      send_msg(s->clients[i].fd, msg_type, msg_buf, msg_len);
+    Client *other = &s->clients[i];
+    if (other->active && other->room == room && other->role == role) {
+      other->room = -1;
+      other->reached = NEEDS_HELLO;
+      remove_client(s, i);
     }
   }
+
+  c->role = role;
+  c->reached = NEEDS_SEAT;
+  c->room = room;
+  return ERR_NONE;
 }
 
-static void broadcast_except(Server *s, int room, const Client *skip, uint8_t msg_type,
-                             const void *msg_buf, uint16_t msg_len) {
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    Client *c = &s->clients[i];
-    if (c->active && c->room == room && c != skip) {
-      send_msg(c->fd, msg_type, msg_buf, msg_len);
-    }
-  }
-}
+static void drop_from_room(Server *s, Client *c) {
+  int room = c->room;
+  Room *r = &s->room_table.rooms[room];
+  Role role = c->role;
 
-static void broadcast_state(Server *s, int room) {
+  c->room = -1;
+  c->reached = NEEDS_HELLO;
+
   uint8_t buf[MAX_PAYLOAD];
-  broadcast(s, room, MSG_STATE, buf, encode_state(buf, &s->room_table.rooms[room].game));
+  if (role == ROLE_SPECTATOR) {
+    broadcast(s, room, MSG_PEER_LEFT, buf, encode_peer(buf, role));
+    free_if_quiet(s, room);
+    return;
+  }
+
+  room_vacate_seat(r, role, now_ms());
+  broadcast(s, room, MSG_PEER_DISCONNECTED, buf, encode_peer_disconnected(buf, role, GRACE_SECS));
+  printf("[%s] %s dropped\n", r->id, role_name(role));
 }
 
-static void maybe_start(Server *s, int room) {
-  if (!has_role(s, room, ROLE_WHITE) || !has_role(s, room, ROLE_BLACK)) {
-    return;
+// --- Message handling ----------------------------------------------------------------------------
+
+static GameResult fail(Client *c, ErrorCode code, uint8_t context) {
+  send_error(c->fd, code, context);
+  return NO_RESULT;
+}
+
+static ErrorCode check_msg(const Server *s, const Client *c, const MsgSpec *spec, uint16_t len) {
+  if (spec == NULL || spec->dir != DIR_C2S) {
+    return ERR_UNKNOWN_MESSAGE;
   }
-  if (!room_start(&s->room_table.rooms[room])) {
-    return;
+  if (len < spec->min_len || len > spec->max_len) {
+    return ERR_MALFORMED;
   }
-  broadcast_state(s, room);
+
+  // NEEDS_LIVE is about the game, so a connection can climb no higher than NEEDS_SEAT
+  MsgNeeds conn_level = spec->needs > NEEDS_SEAT ? NEEDS_SEAT : spec->needs;
+  if (conn_level > c->reached) {
+    switch (c->reached) {
+    case NEEDS_NOTHING:
+      return ERR_NEED_HELLO;
+    case NEEDS_HELLO:
+      return ERR_NOT_IN_ROOM;
+    default:
+      return ERR_NOT_A_PLAYER;
+    }
+  }
+
+  if (spec->needs == NEEDS_LIVE) {
+    const Room *r = &s->room_table.rooms[c->room];
+    if (!r->started) {
+      return ERR_GAME_NOT_STARTED;
+    }
+    if (r->over) {
+      return ERR_GAME_FINISHED;
+    }
+  }
+
+  return ERR_NONE;
+}
+
+static GameResult handle_hello(Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
+  uint16_t version;
+  if (!decode_hello(msg_buf, msg_len, &version)) {
+    return fail(c, ERR_MALFORMED, MSG_HELLO);
+  }
+  if (version != PROTO_VERSION) {
+    return fail(c, ERR_VERSION_MISMATCH, MSG_HELLO);
+  }
+
+  c->reached = NEEDS_HELLO;
+  send_hello_ok(c->fd, MAX_SPECTATORS, GRACE_SECS);
+  return NO_RESULT;
 }
 
 static GameResult handle_create_room(Server *s, Client *c, const uint8_t *msg_buf,
@@ -217,31 +378,6 @@ static GameResult handle_create_room(Server *s, Client *c, const uint8_t *msg_bu
   send_joined(c->fd, r->id, c->role, r->seats[c->role].token, r->flags);
   printf("[%s] created, %s\n", r->id, role_name(c->role));
   return NO_RESULT;
-}
-
-static void remove_client(Server *s, int i) {
-  close(s->clients[i].fd);
-  s->clients[i].active = false;
-}
-
-static ErrorCode reclaim_seat(Server *s, Client *c, Room *r, int room, Role role) {
-  if (!room_claim_seat(r, role)) {
-    return ERR_INTERNAL;
-  }
-
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    Client *other = &s->clients[i];
-    if (other->active && other->room == room && other->role == role) {
-      other->room = -1;
-      other->reached = NEEDS_HELLO;
-      remove_client(s, i);
-    }
-  }
-
-  c->role = role;
-  c->reached = NEEDS_SEAT;
-  c->room = room;
-  return ERR_NONE;
 }
 
 static GameResult handle_join_room(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
@@ -316,20 +452,6 @@ static GameResult handle_join_room(Server *s, Client *c, const uint8_t *msg_buf,
   return NO_RESULT;
 }
 
-static bool free_if_quiet(Server *s, int room) {
-  Room *r = &s->room_table.rooms[room];
-  if (r->seats[ROLE_WHITE].claimed || r->seats[ROLE_BLACK].claimed) {
-    return false;
-  }
-  if (!room_empty(s, room)) {
-    return false;
-  }
-
-  printf("[%s] closed\n", r->id);
-  room_free(r);
-  return true;
-}
-
 static GameResult leave_room(Server *s, Client *c) {
   int room = c->room;
   Room *r = &s->room_table.rooms[room];
@@ -354,96 +476,6 @@ static GameResult leave_room(Server *s, Client *c) {
     return (GameResult){ WIN_FOR(OTHER_COLOR(ROLE_COLOR(role))), REASON_DISCONNECT };
   }
 
-  return NO_RESULT;
-}
-
-static void drop_from_room(Server *s, Client *c) {
-  int room = c->room;
-  Room *r = &s->room_table.rooms[room];
-  Role role = c->role;
-
-  c->room = -1;
-  c->reached = NEEDS_HELLO;
-
-  uint8_t buf[MAX_PAYLOAD];
-  if (role == ROLE_SPECTATOR) {
-    broadcast(s, room, MSG_PEER_LEFT, buf, encode_peer(buf, role));
-    free_if_quiet(s, room);
-    return;
-  }
-
-  room_vacate_seat(r, role, now_ms());
-  broadcast(s, room, MSG_PEER_DISCONNECTED, buf, encode_peer_disconnected(buf, role, GRACE_SECS));
-  printf("[%s] %s dropped\n", r->id, role_name(role));
-}
-
-static void accept_client(Server *s) {
-  int fd = accept_conn(s->listen_fd);
-  if (fd < 0) {
-    return;
-  }
-
-  int slot = -1;
-  for (int i = 0; i < MAX_CLIENTS && slot < 0; i++) {
-    if (!s->clients[i].active) {
-      slot = i;
-    }
-  }
-  if (slot < 0) {
-    send_error(fd, ERR_SERVER_FULL, 0);
-    close(fd);
-    return;
-  }
-
-  s->clients[slot] = (Client){ .fd = fd, .active = true, .reached = NEEDS_NOTHING, .room = -1 };
-  printf("connected\n");
-}
-
-static ErrorCode check_msg(const Server *s, const Client *c, const MsgSpec *spec, uint16_t len) {
-  if (spec == NULL || spec->dir != DIR_C2S) {
-    return ERR_UNKNOWN_MESSAGE;
-  }
-  if (len < spec->min_len || len > spec->max_len) {
-    return ERR_MALFORMED;
-  }
-
-  // NEEDS_LIVE is about the game, so a connection can climb no higher than NEEDS_SEAT
-  MsgNeeds conn_level = spec->needs > NEEDS_SEAT ? NEEDS_SEAT : spec->needs;
-  if (conn_level > c->reached) {
-    switch (c->reached) {
-    case NEEDS_NOTHING:
-      return ERR_NEED_HELLO;
-    case NEEDS_HELLO:
-      return ERR_NOT_IN_ROOM;
-    default:
-      return ERR_NOT_A_PLAYER;
-    }
-  }
-
-  if (spec->needs == NEEDS_LIVE) {
-    const Room *r = &s->room_table.rooms[c->room];
-    if (!r->started) {
-      return ERR_GAME_NOT_STARTED;
-    }
-    if (r->over) {
-      return ERR_GAME_FINISHED;
-    }
-  }
-
-  return ERR_NONE;
-}
-
-static GameResult handle_hello(Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
-  uint16_t version;
-  if (!decode_hello(msg_buf, msg_len, &version)) {
-    return fail(c, ERR_MALFORMED, MSG_HELLO);
-  }
-  if (version != PROTO_VERSION) {
-    return fail(c, ERR_VERSION_MISMATCH, MSG_HELLO);
-  }
-
-  c->reached = NEEDS_HELLO;
-  send_hello_ok(c->fd, MAX_SPECTATORS, GRACE_SECS);
   return NO_RESULT;
 }
 
@@ -482,52 +514,6 @@ static GameResult handle_disconnect(Server *s, int i) {
   return NO_RESULT;
 }
 
-// Records the first result the game produces and announces it. Later results
-// are ignored: the finished position stands.
-static void finish_game(Server *s, int room, GameResult result) {
-  Room *r = &s->room_table.rooms[room];
-  if (!room_finish(r, result)) {
-    return;
-  }
-
-  uint8_t buf[MAX_PAYLOAD];
-  broadcast(s, room, MSG_GAME_OVER, buf, encode_game_over(buf, result));
-  printf("[%s] %s by %s\n", r->id, winner_name(result), reason_name(result));
-}
-
-static void expire_seat(Server *s, int room, Role role) {
-  Room *r = &s->room_table.rooms[room];
-  bool live = r->started && !r->over;
-
-  room_release_seat(r, role);
-
-  uint8_t buf[MAX_PAYLOAD];
-  broadcast(s, room, MSG_PEER_LEFT, buf, encode_peer(buf, role));
-  printf("[%s] %s did not come back\n", r->id, role_name(role));
-
-  if (live) {
-    finish_game(s, room, (GameResult){ WIN_FOR(OTHER_COLOR(ROLE_COLOR(role))), REASON_DISCONNECT });
-  }
-
-  free_if_quiet(s, room);
-}
-
-static void tick(Server *s) {
-  int64_t now = now_ms();
-  for (int i = 0; i < MAX_ROOMS; i++) {
-    Room *r = &s->room_table.rooms[i];
-
-    for (int role = ROLE_WHITE; role <= ROLE_BLACK; role++) {
-      if (!r->used) {
-        break;
-      }
-      if (room_seat_expired(r, role, now)) {
-        expire_seat(s, i, role);
-      }
-    }
-  }
-}
-
 static GameResult handle_msg(Server *s, int i) {
   Client *c = &s->clients[i];
   uint8_t msg_type;
@@ -559,6 +545,36 @@ static GameResult handle_msg(Server *s, int i) {
     return leave_room(s, c);
   default:
     return fail(c, ERR_UNKNOWN_MESSAGE, msg_type);
+  }
+}
+
+// --- Event loop ----------------------------------------------------------------------------------
+
+// Milliseconds until the nearest grace expiry, or -1 to block. Recomputed from
+// an absolute deadline each time, so a spurious wakeup cannot make it drift.
+static int poll_timeout_ms(const Server *s) {
+  int64_t at = room_table_next_expiry(&s->room_table);
+  if (at < 0) {
+    return -1;
+  }
+
+  int64_t wait = at - now_ms();
+  return wait > 0 ? (int)wait : 0;
+}
+
+static void tick(Server *s) {
+  int64_t now = now_ms();
+  for (int i = 0; i < MAX_ROOMS; i++) {
+    Room *r = &s->room_table.rooms[i];
+
+    for (int role = ROLE_WHITE; role <= ROLE_BLACK; role++) {
+      if (!r->used) {
+        break;
+      }
+      if (room_seat_expired(r, role, now)) {
+        expire_seat(s, i, role);
+      }
+    }
   }
 }
 

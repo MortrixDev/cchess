@@ -10,6 +10,8 @@
 #include "client/client.h"
 #include "proto/proto.h"
 
+// --- Theme ---------------------------------------------------------------------------------------
+
 #define STATUS_BAR_HEIGHT 36
 #define CHAT_MIN_WIDTH 220
 #define BORDER_SIZE 20
@@ -30,6 +32,8 @@ static const Color ACCENT_DARK = HEX(0xA37752);
 static const Color SQUARE_SELECTED = HEXA(0xE07B2A, 110);
 static const Color SQUARE_TARGET = HEXA(0xF2D04A, 110);
 static const Color SQUARE_ATTACK = HEXA(0xCC3B2F, 150);
+
+// --- Layout --------------------------------------------------------------------------------------
 
 typedef struct {
   Rectangle board;
@@ -71,6 +75,8 @@ static Layout compute_layout(int w, int h) {
   l.chat = (Rectangle){ x + outer, y, chat_w, outer };
   return l;
 }
+
+// --- Assets --------------------------------------------------------------------------------------
 
 typedef struct {
   Image piece_images[PIECE_SLOTS];
@@ -135,6 +141,8 @@ static void unload_assets(void) {
   }
 }
 
+// --- Selection -----------------------------------------------------------------------------------
+
 typedef struct {
   int selected;
   bool targets[64];
@@ -146,6 +154,8 @@ static void select_square(const Game *g, int sq) {
   input.selected = sq;
   generate_legal_destinations(g, sq, input.targets);
 }
+
+// --- Board geometry ------------------------------------------------------------------------------
 
 typedef struct {
   int ox, oy, sq;
@@ -173,6 +183,8 @@ static int square_at(Vector2 m, bool is_white, Rectangle board) {
   int rank = is_white ? 7 - row : row;
   return (rank * 8) + file;
 }
+
+// --- Board drawing -------------------------------------------------------------------------------
 
 static void draw_border(Rectangle board) {
   DrawRectangleRec(
@@ -254,6 +266,8 @@ static void draw_board(const Game *g, bool is_white, const Input *in, Rectangle 
   }
 }
 
+// --- Status bar ----------------------------------------------------------------------------------
+
 static const char *reason_text(uint8_t reason) {
   switch (reason) {
   case REASON_CHECKMATE:
@@ -326,6 +340,8 @@ static void draw_status(const View *v, Rectangle r) {
              (Vector2){ r.x + 10, r.y + ((r.height - STATUS_FONT_SIZE) / 2.0f) }, STATUS_FONT_SIZE,
              STATUS_FONT_SIZE / 10.0f, RAYWHITE);
 }
+
+// --- Frame ---------------------------------------------------------------------------------------
 
 static void draw_chat(Rectangle r) {
   DrawRectangleRec(r, (Color){ 10, 10, 10, 255 });

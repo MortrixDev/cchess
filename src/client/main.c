@@ -22,43 +22,13 @@
 #define RECONNECT_MIN_MS 250
 #define RECONNECT_MAX_MS 2000
 
+// --- Shared state --------------------------------------------------------------------------------
+
 static bool should_quit(ClientState *cs) {
   pthread_mutex_lock(&cs->lock);
   bool quit = cs->quit;
   pthread_mutex_unlock(&cs->lock);
   return quit;
-}
-
-static int next_backoff(int delay_ms) {
-  if (delay_ms == 0) {
-    return RECONNECT_MIN_MS;
-  }
-
-  int next = delay_ms * 2;
-  return next > RECONNECT_MAX_MS ? RECONNECT_MAX_MS : next;
-}
-
-// Sleeps in slices so closing the window does not wait out the whole backoff.
-static void backoff_sleep(ClientState *cs, int delay_ms) {
-  for (int slept = 0; slept < delay_ms && !should_quit(cs); slept += 50) {
-    usleep(50 * 1000);
-  }
-}
-
-// Terminal: the server rejected the token, or the grace window has certainly
-// passed, so there is no seat left to reclaim.
-static bool stop_reconnecting(ClientState *cs) {
-  pthread_mutex_lock(&cs->lock);
-  if (!cs->stopped && cs->view.reconnect_started_ms != 0 &&
-      now_ms() - cs->view.reconnect_started_ms > (int64_t)cs->view.grace_secs * 1000) {
-    cs->stopped = true;
-    cs->view.reconnecting = false;
-    cs->view.error_code = ERR_BAD_TOKEN;
-    cs->view.error_context = MSG_JOIN_ROOM;
-  }
-  bool stopped = cs->stopped;
-  pthread_mutex_unlock(&cs->lock);
-  return stopped;
 }
 
 static void mark_connected(ClientState *cs, int fd) {
@@ -97,6 +67,42 @@ static bool flush_outbox(ClientState *cs, int fd) {
   }
   return true;
 }
+
+// --- Reconnect backoff ---------------------------------------------------------------------------
+
+static int next_backoff(int delay_ms) {
+  if (delay_ms == 0) {
+    return RECONNECT_MIN_MS;
+  }
+
+  int next = delay_ms * 2;
+  return next > RECONNECT_MAX_MS ? RECONNECT_MAX_MS : next;
+}
+
+// Sleeps in slices so closing the window does not wait out the whole backoff.
+static void backoff_sleep(ClientState *cs, int delay_ms) {
+  for (int slept = 0; slept < delay_ms && !should_quit(cs); slept += 50) {
+    usleep(50 * 1000);
+  }
+}
+
+// Terminal: the server rejected the token, or the grace window has certainly
+// passed, so there is no seat left to reclaim.
+static bool stop_reconnecting(ClientState *cs) {
+  pthread_mutex_lock(&cs->lock);
+  if (!cs->stopped && cs->view.reconnect_started_ms != 0 &&
+      now_ms() - cs->view.reconnect_started_ms > (int64_t)cs->view.grace_secs * 1000) {
+    cs->stopped = true;
+    cs->view.reconnecting = false;
+    cs->view.error_code = ERR_BAD_TOKEN;
+    cs->view.error_context = MSG_JOIN_ROOM;
+  }
+  bool stopped = cs->stopped;
+  pthread_mutex_unlock(&cs->lock);
+  return stopped;
+}
+
+// --- Server messages -----------------------------------------------------------------------------
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void handle_server_msg(ClientState *cs, int fd, uint8_t msg_type, const uint8_t *msg_buf,
@@ -283,6 +289,8 @@ static void handle_server_msg(ClientState *cs, int fd, uint8_t msg_type, const u
   }
 }
 
+// --- Network thread ------------------------------------------------------------------------------
+
 // Returns when the socket dies or we are told to quit.
 static void session(ClientState *cs, int fd) {
   for (;;) {
@@ -350,6 +358,8 @@ void *network_thread(void *arg) {
   pthread_mutex_unlock(&cs->lock);
   return NULL;
 }
+
+// --- Startup -------------------------------------------------------------------------------------
 
 static void usage(const char *argv0) {
   fprintf(stderr,

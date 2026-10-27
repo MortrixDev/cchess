@@ -9,6 +9,8 @@
 #include "net/net.h"
 #include "util/util.h"
 
+// --- Message table -------------------------------------------------------------------------------
+
 static const MsgSpec MSG_SPECS[] = {
 #define X(id, name, dir, mn, mx, needs) [name] = { #name, dir, mn, mx, needs },
   MSG_TABLE(X)
@@ -54,6 +56,8 @@ bool proto_self_check(void) {
   return ok;
 }
 
+// --- Names ---------------------------------------------------------------------------------------
+
 const char *msg_type_name(uint8_t msg_type) {
   switch (msg_type) {
 #define X(id, name, ...) \
@@ -90,6 +94,8 @@ const char *error_message(uint8_t code) {
   }
 }
 
+// --- Framing -------------------------------------------------------------------------------------
+
 bool send_msg(int fd, uint8_t msg_type, const void *msg_buf, uint16_t msg_len) {
   uint8_t header[3] = { msg_type, msg_len >> 8, msg_len & 0xFF };
   return write_full(fd, header, 3) && write_full(fd, msg_buf, msg_len);
@@ -107,6 +113,17 @@ bool receive_msg(int fd, uint8_t *msg_type, uint8_t *msg_buf, uint16_t *msg_len,
     return false;
   }
   return read_full(fd, msg_buf, *msg_len);
+}
+
+// --- Field packing -------------------------------------------------------------------------------
+
+static void put_u16(uint8_t *buf, uint16_t v) {
+  buf[0] = v >> 8;
+  buf[1] = v & 0xFF;
+}
+
+static uint16_t get_u16(const uint8_t *buf) {
+  return (uint16_t)((buf[0] << 8) | buf[1]);
 }
 
 static void pack_state(const Game *g, uint8_t *out) {
@@ -134,16 +151,7 @@ static void unpack_state(Game *g, const uint8_t *in) {
   g->fullmove_number = (in[71] << 8) | in[72];
 }
 
-uint16_t encode_state(uint8_t *buf, const Game *g) {
-  pack_state(g, buf);
-  return STATE_SIZE;
-}
-
-uint16_t encode_game_over(uint8_t *buf, GameResult r) {
-  buf[0] = r.result;
-  buf[1] = r.reason;
-  return 2;
-}
+// --- Validators ----------------------------------------------------------------------------------
 
 static bool valid_room_id(const uint8_t *in) {
   for (int i = 0; i < ROOM_ID_LEN; i++) {
@@ -168,14 +176,51 @@ static bool valid_role(uint8_t role) {
   return role == ROLE_WHITE || role == ROLE_BLACK || role == ROLE_SPECTATOR;
 }
 
-static void put_u16(uint8_t *buf, uint16_t v) {
-  buf[0] = v >> 8;
-  buf[1] = v & 0xFF;
+static bool valid_game(const Game *g) {
+  for (int sq = 0; sq < 64; sq++) {
+    Piece p = g->board[sq];
+    if (p & ~(TYPE_MASK | COLOR_MASK)) {
+      return false; // no bits outside type+color
+    }
+    if (TYPE(p) > KING) {
+      return false; // 7 and 15 are unused
+    }
+  }
+  if (g->turn != COLOR_WHITE && g->turn != COLOR_BLACK) {
+    return false;
+  }
+  if (g->en_passant_square != NO_SQUARE && g->en_passant_square >= 64) {
+    return false;
+  }
+
+  return true;
 }
 
-static uint16_t get_u16(const uint8_t *buf) {
-  return (uint16_t)((buf[0] << 8) | buf[1]);
+// --- Encoders ------------------------------------------------------------------------------------
+
+uint16_t encode_state(uint8_t *buf, const Game *g) {
+  pack_state(g, buf);
+  return STATE_SIZE;
 }
+
+uint16_t encode_game_over(uint8_t *buf, GameResult r) {
+  buf[0] = r.result;
+  buf[1] = r.reason;
+  return 2;
+}
+
+uint16_t encode_peer(uint8_t *buf, Role role) {
+  buf[0] = role;
+  return PEER_SIZE;
+}
+
+uint16_t encode_peer_disconnected(uint8_t *buf, Role role, uint16_t grace_secs) {
+  buf[0] = role;
+  put_u16(buf + 1, grace_secs);
+  return PEER_DISC_SIZE;
+}
+
+// --- Senders -------------------------------------------------------------------------------------
 
 bool send_hello(int fd) {
   uint8_t buf[HELLO_SIZE];
@@ -274,16 +319,7 @@ bool send_resign(int fd) {
   return send_msg(fd, MSG_RESIGN, NULL, 0);
 }
 
-uint16_t encode_peer(uint8_t *buf, Role role) {
-  buf[0] = role;
-  return PEER_SIZE;
-}
-
-uint16_t encode_peer_disconnected(uint8_t *buf, Role role, uint16_t grace_secs) {
-  buf[0] = role;
-  put_u16(buf + 1, grace_secs);
-  return PEER_DISC_SIZE;
-}
+// --- Decoders ------------------------------------------------------------------------------------
 
 bool decode_hello(const uint8_t *buf, uint16_t len, uint16_t *version) {
   if (len != HELLO_SIZE) {
@@ -375,6 +411,30 @@ bool decode_joined(const uint8_t *buf, uint16_t len, char *room_id, Role *role, 
   return true;
 }
 
+bool decode_state(const uint8_t *buf, uint16_t len, Game *g) {
+  if (len != STATE_SIZE) {
+    return false;
+  }
+
+  Game decoded;
+  unpack_state(&decoded, buf);
+  if (!valid_game(&decoded)) {
+    return false;
+  }
+
+  *g = decoded;
+  return true;
+}
+
+bool decode_game_over(const uint8_t *buf, uint16_t len, GameResult *r) {
+  if (len != 2) {
+    return false;
+  }
+
+  *r = (GameResult){ buf[0], buf[1] };
+  return true;
+}
+
 bool decode_error(const uint8_t *buf, uint16_t len, uint8_t *code, uint8_t *context) {
   if (len != ERROR_SIZE) {
     return false;
@@ -382,6 +442,18 @@ bool decode_error(const uint8_t *buf, uint16_t len, uint8_t *code, uint8_t *cont
 
   *code = buf[0];
   *context = buf[1];
+  return true;
+}
+
+bool decode_move(const uint8_t *buf, uint16_t len, Move *m) {
+  if (len != 3) {
+    return false;
+  }
+  if (buf[0] >= 64 || buf[1] >= 64) {
+    return false;
+  }
+
+  *m = (Move){ buf[0], buf[1], buf[2] };
   return true;
 }
 
@@ -407,61 +479,5 @@ bool decode_peer_disconnected(const uint8_t *buf, uint16_t len, Role *role, uint
 
   *role = buf[0];
   *grace_secs = get_u16(buf + 1);
-  return true;
-}
-
-bool decode_move(const uint8_t *buf, uint16_t len, Move *m) {
-  if (len != 3) {
-    return false;
-  }
-  if (buf[0] >= 64 || buf[1] >= 64) {
-    return false;
-  }
-
-  *m = (Move){ buf[0], buf[1], buf[2] };
-  return true;
-}
-
-static bool valid_game(const Game *g) {
-  for (int sq = 0; sq < 64; sq++) {
-    Piece p = g->board[sq];
-    if (p & ~(TYPE_MASK | COLOR_MASK)) {
-      return false; // no bits outside type+color
-    }
-    if (TYPE(p) > KING) {
-      return false; // 7 and 15 are unused
-    }
-  }
-  if (g->turn != COLOR_WHITE && g->turn != COLOR_BLACK) {
-    return false;
-  }
-  if (g->en_passant_square != NO_SQUARE && g->en_passant_square >= 64) {
-    return false;
-  }
-
-  return true;
-}
-
-bool decode_state(const uint8_t *buf, uint16_t len, Game *g) {
-  if (len != STATE_SIZE) {
-    return false;
-  }
-
-  Game decoded;
-  unpack_state(&decoded, buf);
-  if (!valid_game(&decoded)) {
-    return false;
-  }
-
-  *g = decoded;
-  return true;
-}
-
-bool decode_game_over(const uint8_t *buf, uint16_t len, GameResult *r) {
-  if (len != 2) {
-    return false;
-  }
-
-  *r = (GameResult){ buf[0], buf[1] };
   return true;
 }
