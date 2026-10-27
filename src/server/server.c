@@ -3,6 +3,7 @@
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/poll.h>
 #include <unistd.h>
 
 #include "chess/board.h"
@@ -77,8 +78,9 @@ static const char *reason_name(GameResult r) {
     return "fifty-move rule";
   case REASON_INSUFFICIENT_MATERIAL:
     return "insufficient material";
+  default:
+    return "an unknown reason";
   }
-  return "an unknown reason";
 }
 
 static const char *winner_name(GameResult r) {
@@ -89,8 +91,9 @@ static const char *winner_name(GameResult r) {
     return "black wins";
   case RESULT_DRAW:
     return "draw";
+  default:
+    return "game over";
   }
-  return "game over";
 }
 
 static GameResult fail(Client *c, ErrorCode code, uint8_t context) {
@@ -246,8 +249,10 @@ static GameResult handle_join_room(Server *s, Client *c, const uint8_t *msg_buf,
     return fail(c, ERR_ALREADY_IN_ROOM, MSG_JOIN_ROOM);
   }
 
-  char id[ROOM_ID_BUF_LEN], password[PASSWORD_BUF_LEN];
-  uint8_t flags, token[TOKEN_SIZE];
+  char id[ROOM_ID_BUF_LEN];
+  char password[PASSWORD_BUF_LEN];
+  uint8_t flags;
+  uint8_t token[TOKEN_SIZE];
   if (!decode_join_room(msg_buf, msg_len, id, &flags, password, token)) {
     return fail(c, ERR_MALFORMED, MSG_JOIN_ROOM);
   }
@@ -525,7 +530,8 @@ static void tick(Server *s) {
 
 static GameResult handle_msg(Server *s, int i) {
   Client *c = &s->clients[i];
-  uint8_t msg_type, msg_buf[MAX_PAYLOAD];
+  uint8_t msg_type;
+  uint8_t msg_buf[MAX_PAYLOAD];
   uint16_t msg_len;
 
   if (!receive_msg(c->fd, &msg_type, msg_buf, &msg_len, sizeof msg_buf)) {

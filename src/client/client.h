@@ -9,7 +9,7 @@
 #include "chess/rules.h"
 #include "proto/proto.h"
 
-typedef struct View {
+typedef struct {
   bool connected;
   bool joined;
   bool spectator;
@@ -37,7 +37,7 @@ typedef enum {
   INTENT_JOIN,
 } Intent;
 
-typedef struct ClientState {
+typedef struct {
   pthread_mutex_t lock;
   int fd;
   uint8_t token[TOKEN_SIZE];

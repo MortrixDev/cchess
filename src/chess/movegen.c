@@ -61,59 +61,40 @@ bool in_check(const Game *g, PieceColor color) {
   return on_board(king) && is_square_attacked(g, king, OTHER_COLOR(color));
 }
 
-bool is_square_attacked(const Game *g, int sq, PieceColor by_color) {
-  // knight
-  for (int i = 0; i < COUNT(KNIGHT_DIRS); i++) {
-    int t = step(sq, KNIGHT_DIRS[i]);
-    if (on_board(t) && g->board[t] == (KNIGHT | by_color)) {
+static bool attacked_by_leaper(const Game *g, int sq, const Dir *dirs, int n, int piece) {
+  for (int i = 0; i < n; i++) {
+    int t = step(sq, dirs[i]);
+    if (on_board(t) && g->board[t] == piece) {
       return true;
     }
   }
-
-  // king
-  for (int i = 0; i < COUNT(ALL_DIRS); i++) {
-    int t = step(sq, ALL_DIRS[i]);
-    if (on_board(t) && g->board[t] == (KING | by_color)) {
-      return true;
-    }
-  }
-
-  // rook / queen
-  for (int i = 0; i < COUNT(ROOK_DIRS); i++) {
-    for (int t = step(sq, ROOK_DIRS[i]); on_board(t); t = step(t, ROOK_DIRS[i])) {
-      if (IS_EMPTY(g->board[t])) {
-        continue;
-      }
-      if (g->board[t] == (ROOK | by_color) || g->board[t] == (QUEEN | by_color)) {
-        return true;
-      }
-      break;
-    }
-  }
-
-  // bishop / queen
-  for (int i = 0; i < COUNT(BISHOP_DIRS); i++) {
-    for (int t = step(sq, BISHOP_DIRS[i]); on_board(t); t = step(t, BISHOP_DIRS[i])) {
-      if (IS_EMPTY(g->board[t])) {
-        continue;
-      }
-      if (g->board[t] == (BISHOP | by_color) || g->board[t] == (QUEEN | by_color)) {
-        return true;
-      }
-      break;
-    }
-  }
-
-  // pawn
-  int back = -pawn_dir(by_color);
-  for (int df = -1; df <= 1; df += 2) {
-    int t = step(sq, (Dir){ back, df });
-    if (on_board(t) && g->board[t] == (PAWN | by_color)) {
-      return true;
-    }
-  }
-
   return false;
+}
+
+static bool attacked_by_slider(const Game *g, int sq, const Dir *dirs, int n, int piece,
+                               int queen) {
+  for (int i = 0; i < n; i++) {
+    int t = step(sq, dirs[i]);
+    while (on_board(t) && IS_EMPTY(g->board[t])) {
+      t = step(t, dirs[i]);
+    }
+    if (on_board(t) && (g->board[t] == piece || g->board[t] == queen)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool is_square_attacked(const Game *g, int sq, PieceColor by_color) {
+  int back = -pawn_dir(by_color);
+  const Dir pawn_dirs[] = { { back, -1 }, { back, 1 } };
+  int queen = QUEEN | by_color;
+
+  return attacked_by_leaper(g, sq, KNIGHT_DIRS, COUNT(KNIGHT_DIRS), KNIGHT | by_color) ||
+         attacked_by_leaper(g, sq, ALL_DIRS, COUNT(ALL_DIRS), KING | by_color) ||
+         attacked_by_leaper(g, sq, pawn_dirs, COUNT(pawn_dirs), PAWN | by_color) ||
+         attacked_by_slider(g, sq, ROOK_DIRS, COUNT(ROOK_DIRS), ROOK | by_color, queen) ||
+         attacked_by_slider(g, sq, BISHOP_DIRS, COUNT(BISHOP_DIRS), BISHOP | by_color, queen);
 }
 
 static int emit_pawn_move(int from, int to, PieceColor color, Move *out) {
@@ -243,6 +224,8 @@ static int generate_pseudo(const Game *g, Move *out) {
       break;
     case QUEEN:
       n += gen_rays(g, from, ALL_DIRS, COUNT(ALL_DIRS), out + n);
+      break;
+    default:
       break;
     }
   }

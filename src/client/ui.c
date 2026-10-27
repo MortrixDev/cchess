@@ -1,6 +1,8 @@
 #include "client/ui.h"
 
+#include <pthread.h>
 #include <raylib.h>
+#include <stdint.h>
 
 #include "chess/board.h"
 #include "chess/movegen.h"
@@ -41,12 +43,6 @@ static Rectangle cut_bottom(Rectangle *r, float h) {
   return out;
 }
 
-static Rectangle cut_right(Rectangle *r, float w) {
-  Rectangle out = { r->x + r->width - w, r->y, w, r->height };
-  r->width -= w;
-  return out;
-}
-
 static Layout compute_layout(int w, int h) {
   Rectangle rest = { 0, 0, w, h };
   Layout l;
@@ -58,18 +54,18 @@ static Layout compute_layout(int w, int h) {
     chat_w = CHAT_MIN_WIDTH;
   }
 
-  float avail_w = rest.width - chat_w - 2 * BORDER_SIZE;
-  float avail_h = rest.height - 2 * BORDER_SIZE;
+  float avail_w = rest.width - chat_w - (2 * BORDER_SIZE);
+  float avail_h = rest.height - (2 * BORDER_SIZE);
   int sq = (int)(avail_w < avail_h ? avail_w : avail_h) / 8;
   if (sq < 1) {
     sq = 1;
   }
   float size = sq * 8;
-  float outer = size + 2 * BORDER_SIZE;
+  float outer = size + (2 * BORDER_SIZE);
 
   float total_w = outer + chat_w;
-  float x = rest.x + (rest.width - total_w) / 2;
-  float y = rest.y + (rest.height - outer) / 2;
+  float x = rest.x + ((rest.width - total_w) / 2);
+  float y = rest.y + ((rest.height - outer) / 2);
 
   l.board = (Rectangle){ x + BORDER_SIZE, y + BORDER_SIZE, size, size };
   l.chat = (Rectangle){ x + outer, y, chat_w, outer };
@@ -86,14 +82,14 @@ typedef struct {
 static Assets assets;
 
 static void load_assets(void) {
-  static const char names[] = " PNBRQK";
+  static const char NAMES[] = " PNBRQK";
   const char *dir = GetApplicationDirectory();
 
   for (int type = PAWN; type <= KING; type++) {
     Piece w = type | COLOR_WHITE;
     Piece b = type | COLOR_BLACK;
-    assets.piece_images[w] = LoadImage(TextFormat("%sassets/pieces/w%c.png", dir, names[type]));
-    assets.piece_images[b] = LoadImage(TextFormat("%sassets/pieces/b%c.png", dir, names[type]));
+    assets.piece_images[w] = LoadImage(TextFormat("%sassets/pieces/w%c.png", dir, NAMES[type]));
+    assets.piece_images[b] = LoadImage(TextFormat("%sassets/pieces/b%c.png", dir, NAMES[type]));
   }
 
   assets.font =
@@ -158,8 +154,8 @@ typedef struct {
 static BoardGeometry compute_board_geometry(Rectangle rect) {
   BoardGeometry bg;
   bg.sq = (int)(rect.width < rect.height ? rect.width : rect.height) / 8;
-  bg.ox = rect.x + (rect.width - bg.sq * 8) / 2;
-  bg.oy = rect.y + (rect.height - bg.sq * 8) / 2;
+  bg.ox = (int)(rect.x + ((rect.width - bg.sq * 8) / 2));
+  bg.oy = (int)(rect.y + ((rect.height - bg.sq * 8) / 2));
   return bg;
 }
 
@@ -175,11 +171,7 @@ static int square_at(Vector2 m, bool is_white, Rectangle board) {
   }
   int file = is_white ? col : 7 - col;
   int rank = is_white ? 7 - row : row;
-  return rank * 8 + file;
-}
-
-static void draw_piece(Piece p, int x, int y) {
-  DrawTexture(assets.pieces[p], x, y, WHITE);
+  return (rank * 8) + file;
 }
 
 static void draw_border(Rectangle board) {
@@ -187,8 +179,8 @@ static void draw_border(Rectangle board) {
       (Rectangle){
           board.x - BORDER_SIZE,
           board.y - BORDER_SIZE,
-          board.width + 2 * BORDER_SIZE,
-          board.height + 2 * BORDER_SIZE,
+          board.width + (2 * BORDER_SIZE),
+          board.height + (2 * BORDER_SIZE),
       },
       BOARD_BORDER);
 }
@@ -200,56 +192,64 @@ static void draw_coordinates(Rectangle board, bool is_white) {
   float spacing = font_size / 10.0f;
 
   for (int i = 0; i < 8; i++) {
-    char file_label[2] = { 'a' + (is_white ? i : 7 - i), 0 };
-    char rank_label[2] = { '1' + (is_white ? 7 - i : i), 0 };
+    char file_label[2] = { (char)('a' + (is_white ? i : 7 - i)), 0 };
+    char rank_label[2] = { (char)('1' + (is_white ? 7 - i : i)), 0 };
 
     float file_w = MeasureTextEx(assets.font, file_label, font_size, spacing).x;
     float rank_w = MeasureTextEx(assets.font, rank_label, font_size, spacing).x;
 
     DrawTextEx(assets.font, file_label,
-               (Vector2){ bg.ox + i * bg.sq + (bg.sq - file_w) / 2,
-                          bg.oy + 8 * bg.sq + (BORDER_SIZE - font_size) / 2.0f },
+               (Vector2){ bg.ox + (i * bg.sq) + ((bg.sq - file_w) / 2),
+                          bg.oy + (8 * bg.sq) + ((BORDER_SIZE - font_size) / 2.0f) },
                font_size, spacing, BORDER_TEXT);
 
     DrawTextEx(assets.font, rank_label,
-               (Vector2){ bg.ox - BORDER_SIZE + (BORDER_SIZE - rank_w) / 2,
-                          bg.oy + i * bg.sq + (bg.sq - font_size) / 2.0f },
+               (Vector2){ bg.ox - BORDER_SIZE + ((BORDER_SIZE - rank_w) / 2),
+                          bg.oy + (i * bg.sq) + ((bg.sq - font_size) / 2.0f) },
                font_size, spacing, BORDER_TEXT);
   }
 }
 
-static void draw_board(const Game *g, bool is_white, Input *in, Rectangle rect) {
-  BoardGeometry bg = compute_board_geometry(rect);
+static void draw_square_base(int x, int y, int size, bool light) {
+  DrawRectangle(x, y, size, size, light ? ACCENT_LIGHT : ACCENT_DARK);
+  int inner = size - (2 * ACCENT_SIZE);
+  if (inner > 0) {
+    DrawRectangle(x + ACCENT_SIZE, y + ACCENT_SIZE, inner, inner, light ? BOARD_LIGHT : BOARD_DARK);
+  }
+}
+
+static Color square_highlight(const Game *g, const Input *in, int idx) {
+  if (idx == in->selected) {
+    return SQUARE_SELECTED;
+  }
+  if (!in->targets[idx]) {
+    return BLANK;
+  }
   bool pawn_selected = in->selected >= 0 && TYPE(g->board[in->selected]) == PAWN;
+  bool capture = !IS_EMPTY(g->board[idx]) || (pawn_selected && idx == g->en_passant_square);
+  return capture ? SQUARE_ATTACK : SQUARE_TARGET;
+}
+
+static void draw_piece(Piece p, int x, int y) {
+  if (!IS_EMPTY(p)) {
+    DrawTexture(assets.pieces[p], x, y, WHITE);
+  }
+}
+
+static void draw_board(const Game *g, bool is_white, const Input *in, Rectangle rect) {
+  BoardGeometry bg = compute_board_geometry(rect);
 
   for (int rank = 0; rank < 8; rank++) {
     for (int file = 0; file < 8; file++) {
       int col = is_white ? file : 7 - file;
       int row = is_white ? 7 - rank : rank;
-      int x = bg.ox + col * bg.sq;
-      int y = bg.oy + row * bg.sq;
-      int idx = rank * 8 + file;
+      int x = bg.ox + (col * bg.sq);
+      int y = bg.oy + (row * bg.sq);
+      int idx = (rank * 8) + file;
 
-      bool light = (rank + file) % 2;
-      int inner = bg.sq - 2 * ACCENT_SIZE;
-
-      DrawRectangle(x, y, bg.sq, bg.sq, light ? ACCENT_LIGHT : ACCENT_DARK);
-      if (inner > 0) {
-        DrawRectangle(x + ACCENT_SIZE, y + ACCENT_SIZE, inner, inner,
-                      light ? BOARD_LIGHT : BOARD_DARK);
-      }
-
-      if (idx == in->selected) {
-        DrawRectangle(x, y, bg.sq, bg.sq, SQUARE_SELECTED);
-      } else if (in->targets[idx]) {
-        bool capture = !IS_EMPTY(g->board[idx]) || (pawn_selected && idx == g->en_passant_square);
-        DrawRectangle(x, y, bg.sq, bg.sq, capture ? SQUARE_ATTACK : SQUARE_TARGET);
-      }
-
-      Piece p = g->board[idx];
-      if (!IS_EMPTY(p)) {
-        draw_piece(p, x, y);
-      }
+      draw_square_base(x, y, bg.sq, (rank + file) % 2 != 0);
+      DrawRectangle(x, y, bg.sq, bg.sq, square_highlight(g, in, idx));
+      draw_piece(g->board[idx], x, y);
     }
   }
 }
@@ -268,18 +268,28 @@ static const char *reason_text(uint8_t reason) {
     return "by the fifty-move rule";
   case REASON_INSUFFICIENT_MATERIAL:
     return "by insufficient material";
+  default:
+    return NULL;
   }
-  return NULL;
+}
+
+static const char *winner_text(uint8_t result) {
+  switch (result) {
+  case RESULT_WHITE_WINS:
+    return "White wins";
+  case RESULT_BLACK_WINS:
+    return "Black wins";
+  case RESULT_DRAW:
+    return "Draw";
+  default:
+    return "Game over";
+  }
 }
 
 static const char *result_text(const View *v) {
-  const char *winner = v->result.result == RESULT_WHITE_WINS   ? "White wins"
-                       : v->result.result == RESULT_BLACK_WINS ? "Black wins"
-                       : v->result.result == RESULT_DRAW       ? "Draw"
-                                                               : "Game over";
-
+  const char *winner = winner_text(v->result.result);
   const char *reason = reason_text(v->result.reason);
-  return reason ? TextFormat("%s %s", winner, reason) : winner;
+  return reason != NULL ? TextFormat("%s %s", winner, reason) : winner;
 }
 
 // A code this build predates still has to show the user something.
@@ -288,19 +298,33 @@ static const char *error_text(const View *v) {
   return message ? message : TextFormat("server error (%u)", v->error_code);
 }
 
+static const char *status_text(const View *v) {
+  if (!v->connected) {
+    return "Disconnected";
+  }
+  if (v->error_code != ERR_NONE) {
+    return error_text(v);
+  }
+  if (!v->joined) {
+    return "Connecting...";
+  }
+  if (v->game_over) {
+    return result_text(v);
+  }
+  if (!v->has_state) {
+    return TextFormat("Room %s - waiting for opponent", v->room_id);
+  }
+  if (v->spectator) {
+    return v->game.turn == COLOR_WHITE ? "White to move" : "Black to move";
+  }
+  return v->game.turn == v->my_color ? "Your move" : "Opponent's move";
+}
+
 static void draw_status(const View *v, Rectangle r) {
   DrawRectangleRec(r, (Color){ 30, 30, 30, 255 });
-  const char *text = !v->connected   ? "Disconnected"
-                     : v->error_code ? error_text(v)
-                     : !v->joined    ? "Connecting..."
-                     : v->game_over  ? result_text(v)
-                     : !v->has_state ? TextFormat("Room %s - waiting for opponent", v->room_id)
-                     : v->spectator
-                         ? (v->game.turn == COLOR_WHITE ? "White to move" : "Black to move")
-                     : v->game.turn == v->my_color ? "Your move"
-                                                   : "Opponent's move";
-  DrawTextEx(assets.font, text, (Vector2){ r.x + 10, r.y + (r.height - STATUS_FONT_SIZE) / 2.0f },
-             STATUS_FONT_SIZE, STATUS_FONT_SIZE / 10.0f, RAYWHITE);
+  DrawTextEx(assets.font, status_text(v),
+             (Vector2){ r.x + 10, r.y + ((r.height - STATUS_FONT_SIZE) / 2.0f) }, STATUS_FONT_SIZE,
+             STATUS_FONT_SIZE / 10.0f, RAYWHITE);
 }
 
 static void draw_chat(Rectangle r) {
@@ -339,9 +363,9 @@ static void handle_input(ClientState *cs, const View *v, Rectangle board) {
   }
 }
 
-static void render(View *v, Layout *l, const Input *in) {
-  int w = GetScreenWidth();
-  int h = GetScreenHeight();
+static void render(View *v, Layout *l) {
+  // int w = GetScreenWidth();
+  // int h = GetScreenHeight();
 
   rebuild_piece_textures((int)l->board.width / 8);
 
@@ -371,7 +395,7 @@ void run_ui(ClientState *cs) {
 
     Layout l = compute_layout(GetScreenWidth(), GetScreenHeight());
     handle_input(cs, &snapshot, l.board);
-    render(&snapshot, &l, &input);
+    render(&snapshot, &l);
   }
 
   unload_assets();

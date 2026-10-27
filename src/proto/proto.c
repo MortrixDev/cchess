@@ -1,8 +1,11 @@
 #include "proto/proto.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "chess/board.h"
+#include "chess/rules.h"
 #include "net/net.h"
 #include "util/util.h"
 
@@ -58,8 +61,9 @@ const char *msg_type_name(uint8_t msg_type) {
     return #name;
     MSG_TABLE(X)
 #undef X
+  default:
+    return "unknown";
   }
-  return "unknown";
 }
 
 const char *error_name(uint8_t code) {
@@ -69,8 +73,9 @@ const char *error_name(uint8_t code) {
     return #name;
     ERROR_TABLE(X)
 #undef X
+  default:
+    return NULL;
   }
-  return NULL;
 }
 
 const char *error_message(uint8_t code) {
@@ -80,8 +85,9 @@ const char *error_message(uint8_t code) {
     return msg;
     ERROR_TABLE(X)
 #undef X
+  default:
+    return NULL;
   }
-  return NULL;
 }
 
 bool send_msg(int fd, uint8_t msg_type, const void *msg_buf, uint16_t msg_len) {
@@ -194,7 +200,11 @@ bool send_create_room(int fd, uint8_t flags, const char *password) {
 
   buf[0] = flags & ROOM_FLAG_MASK;
   buf[1] = (uint8_t)password_len;
-  memcpy(buf + 2, password, password_len);
+
+  if (password_len > 0) {
+    // NOLINTNEXTLINE(bugprone-not-null-terminated-result)
+    memcpy(buf + 2, password, password_len);
+  }
   return send_msg(fd, MSG_CREATE_ROOM, buf, (uint16_t)(2 + password_len));
 }
 
@@ -214,7 +224,12 @@ bool send_join_room(int fd, const char *room_id, uint8_t flags, const char *pass
   buf[ROOM_ID_LEN + 1] = (uint8_t)password_len;
 
   uint16_t n = JOIN_ROOM_MIN + (uint16_t)password_len;
-  memcpy(buf + JOIN_ROOM_MIN, password, password_len);
+
+  if (password_len > 0) {
+    // NOLINTNEXTLINE(bugprone-not-null-terminated-result)
+    memcpy(buf + JOIN_ROOM_MIN, password, password_len);
+  }
+
   if (flags & JOIN_HAS_TOKEN) {
     memcpy(buf + n, token, TOKEN_SIZE);
     n += TOKEN_SIZE;

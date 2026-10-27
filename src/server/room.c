@@ -1,11 +1,13 @@
 #include "server/room.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/random.h>
 
 #include "chess/board.h"
+#include "chess/rules.h"
 #include "proto/proto.h"
 
 void room_init(Room *r, const char *id, const char *password, uint8_t flags) {
@@ -125,7 +127,7 @@ static bool seat_waiting(const Seat *seat) {
 
 bool room_seat_expired(const Room *r, Role role, int64_t now) {
   const Seat *seat = &r->seats[role];
-  return seat_waiting(seat) && now - seat->vacated_ms >= GRACE_SECS * 1000;
+  return seat_waiting(seat) && now - seat->vacated_ms >= GRACE_SECS * INT64_C(1000);
 }
 
 int64_t room_table_next_expiry(const RoomTable *t) {
@@ -141,7 +143,7 @@ int64_t room_table_next_expiry(const RoomTable *t) {
         continue;
       }
 
-      int64_t at = r->seats[role].vacated_ms + GRACE_SECS * 1000;
+      int64_t at = r->seats[role].vacated_ms + (GRACE_SECS * INT64_C(1000));
       if (soonest < 0 || at < soonest) {
         soonest = at;
       }

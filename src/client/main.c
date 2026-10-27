@@ -9,6 +9,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "chess/board.h"
+#include "chess/rules.h"
 #include "client/client.h"
 #include "client/ui.h"
 #include "net/net.h"
@@ -96,11 +98,13 @@ static bool flush_outbox(ClientState *cs, int fd) {
   return true;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void handle_server_msg(ClientState *cs, int fd, uint8_t msg_type, const uint8_t *msg_buf,
                               uint16_t msg_len) {
   switch (msg_type) {
   case MSG_HELLO_OK: {
-    uint16_t version, grace_secs;
+    uint16_t version;
+    uint16_t grace_secs;
     uint8_t max_spectators;
     if (!decode_hello_ok(msg_buf, msg_len, &version, &max_spectators, &grace_secs)) {
       return;
@@ -118,7 +122,8 @@ static void handle_server_msg(ClientState *cs, int fd, uint8_t msg_type, const u
 
     // Copy the plan out so the send happens with the lock released.
     uint8_t token[TOKEN_SIZE];
-    char room[ROOM_ID_BUF_LEN], password[PASSWORD_BUF_LEN];
+    char room[ROOM_ID_BUF_LEN];
+    char password[PASSWORD_BUF_LEN];
 
     pthread_mutex_lock(&cs->lock);
     cs->view.grace_secs = grace_secs;
@@ -142,7 +147,8 @@ static void handle_server_msg(ClientState *cs, int fd, uint8_t msg_type, const u
 
   case MSG_JOINED: {
     char room_id[ROOM_ID_BUF_LEN];
-    uint8_t token[TOKEN_SIZE], flags;
+    uint8_t token[TOKEN_SIZE];
+    uint8_t flags;
     Role role;
     if (!decode_joined(msg_buf, msg_len, room_id, &role, token, &flags)) {
       return;
@@ -199,7 +205,8 @@ static void handle_server_msg(ClientState *cs, int fd, uint8_t msg_type, const u
   }
 
   case MSG_ERROR: {
-    uint8_t code, context;
+    uint8_t code;
+    uint8_t context;
     if (!decode_error(msg_buf, msg_len, &code, &context)) {
       return;
     }
@@ -290,7 +297,8 @@ static void session(ClientState *cs, int fd) {
     }
 
     if (ready > 0) {
-      uint8_t msg_type, msg_buf[MAX_PAYLOAD];
+      uint8_t msg_type;
+      uint8_t msg_buf[MAX_PAYLOAD];
       uint16_t msg_len;
       if (!receive_msg(fd, &msg_type, msg_buf, &msg_len, sizeof msg_buf)) {
         return;

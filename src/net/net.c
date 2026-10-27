@@ -3,9 +3,11 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 bool read_full(int fd, void *buf, size_t n) {
@@ -44,7 +46,9 @@ int connect_to(const char *host, int port) {
   char port_str[8];
   snprintf(port_str, sizeof port_str, "%d", port);
 
-  struct addrinfo hints = { 0 }, *res, *rp;
+  struct addrinfo hints = { 0 };
+  struct addrinfo *res;
+  struct addrinfo *rp;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
 

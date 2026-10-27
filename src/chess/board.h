@@ -10,11 +10,11 @@ typedef uint8_t PieceColor;
 enum {
   EMPTY = 0,
   PAWN = 1,
-  KNIGHT,
-  BISHOP,
-  ROOK,
-  QUEEN,
-  KING
+  KNIGHT = 2,
+  BISHOP = 3,
+  ROOK = 4,
+  QUEEN = 5,
+  KING = 6
 };
 
 enum {
@@ -72,7 +72,7 @@ static inline bool on_board(int sq) {
 }
 
 static inline int square_of(int rank, int file) {
-  return rank * 8 + file;
+  return (rank * 8) + file;
 }
 
 // One step from sq in direction d, or -1 if that leaves the board.

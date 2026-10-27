@@ -3,14 +3,14 @@
 #include <stdlib.h>
 
 void init_board(Game *g) {
-  static const Piece back_rank[8] = { ROOK, KNIGHT, BISHOP, QUEEN, KING, BISHOP, KNIGHT, ROOK };
+  static const Piece BACK_RANK[8] = { ROOK, KNIGHT, BISHOP, QUEEN, KING, BISHOP, KNIGHT, ROOK };
   *g = (Game){ 0 };
 
   for (int file = 0; file < 8; file++) {
-    g->board[file] = back_rank[file] | COLOR_WHITE;
+    g->board[file] = BACK_RANK[file] | COLOR_WHITE;
     g->board[8 + file] = PAWN | COLOR_WHITE;
     g->board[48 + file] = PAWN | COLOR_BLACK;
-    g->board[56 + file] = back_rank[file] | COLOR_BLACK;
+    g->board[56 + file] = BACK_RANK[file] | COLOR_BLACK;
   }
 
   g->turn = COLOR_WHITE;
@@ -34,6 +34,8 @@ static void revoke_rook_right(Game *g, int sq) {
     break;
   case 63:
     g->can_castle[COLOR_INDEX(COLOR_BLACK)][CASTLE_KING] = false;
+    break;
+  default:
     break;
   }
 }

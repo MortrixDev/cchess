@@ -6,12 +6,20 @@ Checks: >
   misc-*,
   performance-*,
   -bugprone-easily-swappable-parameters,
+  -bugprone-tagged-union-member-count,
   -readability-identifier-length,
   -readability-magic-numbers,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+HeaderFilterRegex: 'src/.*'
 CheckOptions:
   readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
+  readability-identifier-naming.EnumConstantCase: UPPER_CASE
+  readability-identifier-naming.GlobalConstantCase: UPPER_CASE
+  readability-identifier-naming.StaticConstantCase: UPPER_CASE
   readability-identifier-naming.StructCase: CamelCase
   readability-identifier-naming.FunctionCase: lower_case
   readability-identifier-naming.VariableCase: lower_case
   readability-identifier-naming.ParameterCase: lower_case
+  readability-uppercase-literal-suffix.NewSuffixes: 'L;LL;UL;ULL;U;f'
+  misc-include-cleaner.IgnoreHeaders: 'bits/.*;asm/.*;asm-generic/.*;linux/.*'
+  bugprone-narrowing-conversions.WarnOnIntegerToFloatingPointNarrowingConversion: false
