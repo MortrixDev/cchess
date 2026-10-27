@@ -1,10 +1,10 @@
 #ifndef SERVER_SERVER_H
 #define SERVER_SERVER_H
 
+#include <stdbool.h>
+
 #include "proto/proto.h"
 #include "server/room.h"
-
-#include <stdbool.h>
 
 #define MAX_CLIENTS 128
 

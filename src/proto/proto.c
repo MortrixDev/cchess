@@ -1,9 +1,10 @@
 #include "proto/proto.h"
-#include "net/net.h"
-#include "util/util.h"
 
 #include <stdio.h>
 #include <string.h>
+
+#include "net/net.h"
+#include "util/util.h"
 
 static const MsgSpec MSG_SPECS[] = {
 #define X(id, name, dir, mn, mx, needs) [name] = { #name, dir, mn, mx, needs },
@@ -12,7 +13,9 @@ static const MsgSpec MSG_SPECS[] = {
 };
 
 const MsgSpec *msg_spec(uint8_t msg_type) {
-  if (msg_type >= COUNT(MSG_SPECS)) return NULL;
+  if (msg_type >= COUNT(MSG_SPECS)) {
+    return NULL;
+  }
   const MsgSpec *spec = &MSG_SPECS[msg_type];
   return spec->name ? spec : NULL;
 }
@@ -22,16 +25,18 @@ bool proto_self_check(void) {
   bool ok = true;
   for (int i = 0; i < COUNT(MSG_SPECS); i++) {
     const MsgSpec *spec = msg_spec((uint8_t)i);
-    if (spec == NULL) continue; // unused or retired id
+    if (spec == NULL) {
+      continue; // unused or retired id
+    }
 
     if (spec->min_len > spec->max_len) {
-      fprintf(stderr, "%s: min_len %u exceeds max_len %u\n",
-              spec->name, spec->min_len, spec->max_len);
+      fprintf(stderr, "%s: min_len %u exceeds max_len %u\n", spec->name, spec->min_len,
+              spec->max_len);
       ok = false;
     }
     if (spec->max_len > MAX_PAYLOAD) {
-      fprintf(stderr, "%s: max_len %u exceeds MAX_PAYLOAD %u\n",
-              spec->name, spec->max_len, (unsigned)MAX_PAYLOAD);
+      fprintf(stderr, "%s: max_len %u exceeds MAX_PAYLOAD %u\n", spec->name, spec->max_len,
+              (unsigned)MAX_PAYLOAD);
       ok = false;
     }
     if (spec->dir != DIR_C2S && spec->dir != DIR_S2C) {
@@ -48,27 +53,33 @@ bool proto_self_check(void) {
 
 const char *msg_type_name(uint8_t msg_type) {
   switch (msg_type) {
-    #define X(id, name, ...) case name: return #name;
-      MSG_TABLE(X)
-    #undef X
+#define X(id, name, ...) \
+  case name:             \
+    return #name;
+    MSG_TABLE(X)
+#undef X
   }
   return "unknown";
 }
 
 const char *error_name(uint8_t code) {
   switch (code) {
-    #define X(id, name, ...) case name: return #name;
-      ERROR_TABLE(X)
-    #undef X
+#define X(id, name, ...) \
+  case name:             \
+    return #name;
+    ERROR_TABLE(X)
+#undef X
   }
   return NULL;
 }
 
 const char *error_message(uint8_t code) {
   switch (code) {
-    #define X(id, name, msg) case name: return msg;
-      ERROR_TABLE(X)
-    #undef X
+#define X(id, name, msg) \
+  case name:             \
+    return msg;
+    ERROR_TABLE(X)
+#undef X
   }
   return NULL;
 }
@@ -78,14 +89,17 @@ bool send_msg(int fd, uint8_t msg_type, const void *msg_buf, uint16_t msg_len) {
   return write_full(fd, header, 3) && write_full(fd, msg_buf, msg_len);
 }
 
-bool receive_msg(int fd, uint8_t *msg_type, uint8_t *msg_buf, uint16_t *msg_len, uint16_t max_msg_len) {
+bool receive_msg(int fd, uint8_t *msg_type, uint8_t *msg_buf, uint16_t *msg_len,
+                 uint16_t max_msg_len) {
   uint8_t header[3];
-  if (!read_full(fd, header, 3))
+  if (!read_full(fd, header, 3)) {
     return false;
+  }
   *msg_type = header[0];
   *msg_len = (header[1] << 8) | header[2];
-  if (*msg_len > max_msg_len)
+  if (*msg_len > max_msg_len) {
     return false;
+  }
   return read_full(fd, msg_buf, *msg_len);
 }
 
@@ -128,14 +142,18 @@ uint16_t encode_game_over(uint8_t *buf, GameResult r) {
 static bool valid_room_id(const uint8_t *in) {
   for (int i = 0; i < ROOM_ID_LEN; i++) {
     bool ok = (in[i] >= 'A' && in[i] <= 'Z') || (in[i] >= '0' && in[i] <= '9');
-    if (!ok) return false;
+    if (!ok) {
+      return false;
+    }
   }
   return true;
 }
 
 static bool valid_password(const uint8_t *in, uint8_t len) {
   for (uint8_t i = 0; i < len; i++) {
-    if (in[i] < 0x20 || in[i] > 0x7E) return false;
+    if (in[i] < 0x20 || in[i] > 0x7E) {
+      return false;
+    }
   }
   return true;
 }
@@ -170,7 +188,9 @@ bool send_hello_ok(int fd, uint8_t max_spectators, uint16_t grace_secs) {
 bool send_create_room(int fd, uint8_t flags, const char *password) {
   uint8_t buf[CREATE_ROOM_MAX];
   size_t password_len = password ? strlen(password) : 0;
-  if (password_len > MAX_PASSWORD_LEN) return false;
+  if (password_len > MAX_PASSWORD_LEN) {
+    return false;
+  }
 
   buf[0] = flags & ROOM_FLAG_MASK;
   buf[1] = (uint8_t)password_len;
@@ -182,8 +202,12 @@ bool send_join_room(int fd, const char *room_id, uint8_t flags, const char *pass
                     const uint8_t *token) {
   uint8_t buf[JOIN_ROOM_MAX];
   size_t password_len = password ? strlen(password) : 0;
-  if (strlen(room_id) != ROOM_ID_LEN || password_len > MAX_PASSWORD_LEN) return false;
-  if ((flags & JOIN_HAS_TOKEN) && token == NULL) return false;
+  if (strlen(room_id) != ROOM_ID_LEN || password_len > MAX_PASSWORD_LEN) {
+    return false;
+  }
+  if ((flags & JOIN_HAS_TOKEN) && token == NULL) {
+    return false;
+  }
 
   memcpy(buf, room_id, ROOM_ID_LEN);
   buf[ROOM_ID_LEN] = flags & JOIN_FLAG_MASK;
@@ -247,15 +271,19 @@ uint16_t encode_peer_disconnected(uint8_t *buf, Role role, uint16_t grace_secs) 
 }
 
 bool decode_hello(const uint8_t *buf, uint16_t len, uint16_t *version) {
-  if (len != HELLO_SIZE) return false;
+  if (len != HELLO_SIZE) {
+    return false;
+  }
 
   *version = get_u16(buf);
   return true;
 }
 
-bool decode_hello_ok(const uint8_t *buf, uint16_t len, uint16_t *version,
-                     uint8_t *max_spectators, uint16_t *grace_secs) {
-  if (len != HELLO_OK_SIZE) return false;
+bool decode_hello_ok(const uint8_t *buf, uint16_t len, uint16_t *version, uint8_t *max_spectators,
+                     uint16_t *grace_secs) {
+  if (len != HELLO_OK_SIZE) {
+    return false;
+  }
 
   *version = get_u16(buf);
   *max_spectators = buf[2];
@@ -264,14 +292,22 @@ bool decode_hello_ok(const uint8_t *buf, uint16_t len, uint16_t *version,
 }
 
 bool decode_create_room(const uint8_t *buf, uint16_t len, uint8_t *flags, char *password) {
-  if (len < CREATE_ROOM_MIN || len > CREATE_ROOM_MAX) return false;
+  if (len < CREATE_ROOM_MIN || len > CREATE_ROOM_MAX) {
+    return false;
+  }
 
   uint8_t pw_len = buf[1];
-  if (len != CREATE_ROOM_MIN + pw_len) return false;
-  if (!valid_password(buf + 2, pw_len)) return false;
+  if (len != CREATE_ROOM_MIN + pw_len) {
+    return false;
+  }
+  if (!valid_password(buf + 2, pw_len)) {
+    return false;
+  }
 
   *flags = buf[0] & ROOM_FLAG_MASK;
-  if (ROOM_PREFER(*flags) > PREFER_BLACK) return false;
+  if (ROOM_PREFER(*flags) > PREFER_BLACK) {
+    return false;
+  }
   memcpy(password, buf + 2, pw_len);
   password[pw_len] = '\0';
   return true;
@@ -279,28 +315,42 @@ bool decode_create_room(const uint8_t *buf, uint16_t len, uint8_t *flags, char *
 
 bool decode_join_room(const uint8_t *buf, uint16_t len, char *room_id, uint8_t *flags,
                       char *password, uint8_t *token) {
-  if (len < JOIN_ROOM_MIN || len > JOIN_ROOM_MAX) return false;
-  if (!valid_room_id(buf)) return false;
+  if (len < JOIN_ROOM_MIN || len > JOIN_ROOM_MAX) {
+    return false;
+  }
+  if (!valid_room_id(buf)) {
+    return false;
+  }
 
   uint8_t f = buf[ROOM_ID_LEN] & JOIN_FLAG_MASK;
   uint8_t pw_len = buf[ROOM_ID_LEN + 1];
   uint16_t want = JOIN_ROOM_MIN + pw_len + ((f & JOIN_HAS_TOKEN) ? TOKEN_SIZE : 0);
-  if (len != want) return false;
-  if (!valid_password(buf + JOIN_ROOM_MIN, pw_len)) return false;
+  if (len != want) {
+    return false;
+  }
+  if (!valid_password(buf + JOIN_ROOM_MIN, pw_len)) {
+    return false;
+  }
 
   memcpy(room_id, buf, ROOM_ID_LEN);
   room_id[ROOM_ID_LEN] = '\0';
   *flags = f;
   memcpy(password, buf + JOIN_ROOM_MIN, pw_len);
   password[pw_len] = '\0';
-  if (f & JOIN_HAS_TOKEN) memcpy(token, buf + JOIN_ROOM_MIN + pw_len, TOKEN_SIZE);
+  if (f & JOIN_HAS_TOKEN) {
+    memcpy(token, buf + JOIN_ROOM_MIN + pw_len, TOKEN_SIZE);
+  }
   return true;
 }
 
-bool decode_joined(const uint8_t *buf, uint16_t len, char *room_id, Role *role,
-                   uint8_t *token, uint8_t *flags) {
-  if (len != JOINED_SIZE) return false;
-  if (!valid_role(buf[ROOM_ID_LEN])) return false;
+bool decode_joined(const uint8_t *buf, uint16_t len, char *room_id, Role *role, uint8_t *token,
+                   uint8_t *flags) {
+  if (len != JOINED_SIZE) {
+    return false;
+  }
+  if (!valid_role(buf[ROOM_ID_LEN])) {
+    return false;
+  }
 
   memcpy(room_id, buf, ROOM_ID_LEN);
   room_id[ROOM_ID_LEN] = '\0';
@@ -311,7 +361,9 @@ bool decode_joined(const uint8_t *buf, uint16_t len, char *room_id, Role *role,
 }
 
 bool decode_error(const uint8_t *buf, uint16_t len, uint8_t *code, uint8_t *context) {
-  if (len != ERROR_SIZE) return false;
+  if (len != ERROR_SIZE) {
+    return false;
+  }
 
   *code = buf[0];
   *context = buf[1];
@@ -319,16 +371,24 @@ bool decode_error(const uint8_t *buf, uint16_t len, uint8_t *code, uint8_t *cont
 }
 
 bool decode_peer(const uint8_t *buf, uint16_t len, Role *role) {
-  if (len != PEER_SIZE) return false;
-  if (!valid_role(buf[0])) return false;
+  if (len != PEER_SIZE) {
+    return false;
+  }
+  if (!valid_role(buf[0])) {
+    return false;
+  }
 
   *role = buf[0];
   return true;
 }
 
 bool decode_peer_disconnected(const uint8_t *buf, uint16_t len, Role *role, uint16_t *grace_secs) {
-  if (len != PEER_DISC_SIZE) return false;
-  if (!valid_role(buf[0])) return false;
+  if (len != PEER_DISC_SIZE) {
+    return false;
+  }
+  if (!valid_role(buf[0])) {
+    return false;
+  }
 
   *role = buf[0];
   *grace_secs = get_u16(buf + 1);
@@ -336,8 +396,12 @@ bool decode_peer_disconnected(const uint8_t *buf, uint16_t len, Role *role, uint
 }
 
 bool decode_move(const uint8_t *buf, uint16_t len, Move *m) {
-  if (len != 3) return false;
-  if (buf[0] >= 64 || buf[1] >= 64) return false;
+  if (len != 3) {
+    return false;
+  }
+  if (buf[0] >= 64 || buf[1] >= 64) {
+    return false;
+  }
 
   *m = (Move){ buf[0], buf[1], buf[2] };
   return true;
@@ -346,29 +410,42 @@ bool decode_move(const uint8_t *buf, uint16_t len, Move *m) {
 static bool valid_game(const Game *g) {
   for (int sq = 0; sq < 64; sq++) {
     Piece p = g->board[sq];
-    if (p & ~(TYPE_MASK | COLOR_MASK)) return false;  // no bits outside type+color
-    if (TYPE(p) > KING) return false;                 // 7 and 15 are unused
+    if (p & ~(TYPE_MASK | COLOR_MASK)) {
+      return false; // no bits outside type+color
+    }
+    if (TYPE(p) > KING) {
+      return false; // 7 and 15 are unused
+    }
   }
-  if (g->turn != COLOR_WHITE && g->turn != COLOR_BLACK) return false;
-  if (g->en_passant_square != NO_SQUARE && g->en_passant_square >= 64) return false;
+  if (g->turn != COLOR_WHITE && g->turn != COLOR_BLACK) {
+    return false;
+  }
+  if (g->en_passant_square != NO_SQUARE && g->en_passant_square >= 64) {
+    return false;
+  }
 
   return true;
 }
 
 bool decode_state(const uint8_t *buf, uint16_t len, Game *g) {
-  if (len != STATE_SIZE) return false;
+  if (len != STATE_SIZE) {
+    return false;
+  }
 
   Game decoded;
   unpack_state(&decoded, buf);
-  if (!valid_game(&decoded)) return false;
+  if (!valid_game(&decoded)) {
+    return false;
+  }
 
   *g = decoded;
   return true;
 }
 
-
 bool decode_game_over(const uint8_t *buf, uint16_t len, GameResult *r) {
-  if (len != 2) return false;
+  if (len != 2) {
+    return false;
+  }
 
   *r = (GameResult){ buf[0], buf[1] };
   return true;

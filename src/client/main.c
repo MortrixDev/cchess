@@ -1,9 +1,3 @@
-#include "client/client.h"
-#include "client/ui.h"
-#include "net/net.h"
-#include "proto/proto.h"
-#include "util/util.h"
-
 #include <ctype.h>
 #include <pthread.h>
 #include <signal.h>
@@ -14,6 +8,12 @@
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include "client/client.h"
+#include "client/ui.h"
+#include "net/net.h"
+#include "proto/proto.h"
+#include "util/util.h"
 
 #define SERVER_HOST "127.0.0.1"
 
@@ -28,7 +28,9 @@ static bool should_quit(ClientState *cs) {
 }
 
 static int next_backoff(int delay_ms) {
-  if (delay_ms == 0) return RECONNECT_MIN_MS;
+  if (delay_ms == 0) {
+    return RECONNECT_MIN_MS;
+  }
 
   int next = delay_ms * 2;
   return next > RECONNECT_MAX_MS ? RECONNECT_MAX_MS : next;
@@ -36,8 +38,9 @@ static int next_backoff(int delay_ms) {
 
 // Sleeps in slices so closing the window does not wait out the whole backoff.
 static void backoff_sleep(ClientState *cs, int delay_ms) {
-  for (int slept = 0; slept < delay_ms && !should_quit(cs); slept += 50)
+  for (int slept = 0; slept < delay_ms && !should_quit(cs); slept += 50) {
     usleep(50 * 1000);
+  }
 }
 
 // Terminal: the server rejected the token, or the grace window has certainly
@@ -69,7 +72,9 @@ static void mark_disconnected(ClientState *cs) {
   cs->view.connected = false;
   cs->view.joined = false;
   cs->view.reconnecting = true;
-  if (cs->view.reconnect_started_ms == 0) cs->view.reconnect_started_ms = now_ms();
+  if (cs->view.reconnect_started_ms == 0) {
+    cs->view.reconnect_started_ms = now_ms();
+  }
   pthread_mutex_unlock(&cs->lock);
 }
 
@@ -82,182 +87,219 @@ static bool flush_outbox(ClientState *cs, int fd) {
   cs->pending_resign = false;
   pthread_mutex_unlock(&cs->lock);
 
-  if (move && !send_move(fd, m)) return false;
-  if (resign && !send_resign(fd)) return false;
+  if (move && !send_move(fd, m)) {
+    return false;
+  }
+  if (resign && !send_resign(fd)) {
+    return false;
+  }
   return true;
 }
 
-static void handle_server_msg(ClientState *cs, int fd, uint8_t msg_type,
-                              const uint8_t *msg_buf, uint16_t msg_len) {
+static void handle_server_msg(ClientState *cs, int fd, uint8_t msg_type, const uint8_t *msg_buf,
+                              uint16_t msg_len) {
   switch (msg_type) {
-    case MSG_HELLO_OK: {
-      uint16_t version, grace_secs;
-      uint8_t max_spectators;
-      if (!decode_hello_ok(msg_buf, msg_len, &version, &max_spectators, &grace_secs)) return;
-
-      // The server rejects a client that is too old; this is the mirror of
-      // that check, for a client that is too new.
-      if (version != PROTO_VERSION) {
-        pthread_mutex_lock(&cs->lock);
-        cs->view.error_code = ERR_VERSION_MISMATCH;
-        cs->view.error_context = MSG_HELLO_OK;
-        pthread_mutex_unlock(&cs->lock);
-        return;
-      }
-
-      // Copy the plan out so the send happens with the lock released.
-      uint8_t token[TOKEN_SIZE];
-      char room[ROOM_ID_BUF_LEN], password[PASSWORD_BUF_LEN];
-
-      pthread_mutex_lock(&cs->lock);
-      cs->view.grace_secs = grace_secs;
-      bool rejoin = cs->has_token;
-      bool create = !rejoin && cs->intent == INTENT_CREATE;
-      bool spectate = cs->spectate;
-      memcpy(token, cs->token, TOKEN_SIZE);
-      snprintf(room, sizeof room, "%s",
-               cs->view.room_id[0] != '\0' ? cs->view.room_id : cs->room_id);
-      snprintf(password, sizeof password, "%s", cs->password);
-      pthread_mutex_unlock(&cs->lock);
-
-      if (rejoin)      send_join_room(fd, room, JOIN_HAS_TOKEN, NULL, token);
-      else if (create) send_create_room(fd, ROOM_ALLOW_SPECTATORS, password);
-      else             send_join_room(fd, room, spectate ? JOIN_AS_SPECTATOR : 0, password, NULL);
-      break;
+  case MSG_HELLO_OK: {
+    uint16_t version, grace_secs;
+    uint8_t max_spectators;
+    if (!decode_hello_ok(msg_buf, msg_len, &version, &max_spectators, &grace_secs)) {
+      return;
     }
 
-    case MSG_JOINED: {
-      char room_id[ROOM_ID_BUF_LEN];
-      uint8_t token[TOKEN_SIZE], flags;
-      Role role;
-      if (!decode_joined(msg_buf, msg_len, room_id, &role, token, &flags)) return;
-
-      bool seated = role != ROLE_SPECTATOR;
-
+    // The server rejects a client that is too old; this is the mirror of
+    // that check, for a client that is too new.
+    if (version != PROTO_VERSION) {
       pthread_mutex_lock(&cs->lock);
-      memcpy(cs->token, token, TOKEN_SIZE);
-      cs->has_token = seated;
-      snprintf(cs->view.room_id, sizeof cs->view.room_id, "%s", room_id);
-      cs->view.spectator = !seated;
-      if (seated) cs->view.my_color = ROLE_COLOR(role);
-      cs->view.joined = true;
+      cs->view.error_code = ERR_VERSION_MISMATCH;
+      cs->view.error_context = MSG_HELLO_OK;
+      pthread_mutex_unlock(&cs->lock);
+      return;
+    }
+
+    // Copy the plan out so the send happens with the lock released.
+    uint8_t token[TOKEN_SIZE];
+    char room[ROOM_ID_BUF_LEN], password[PASSWORD_BUF_LEN];
+
+    pthread_mutex_lock(&cs->lock);
+    cs->view.grace_secs = grace_secs;
+    bool rejoin = cs->has_token;
+    bool create = !rejoin && cs->intent == INTENT_CREATE;
+    bool spectate = cs->spectate;
+    memcpy(token, cs->token, TOKEN_SIZE);
+    snprintf(room, sizeof room, "%s", cs->view.room_id[0] != '\0' ? cs->view.room_id : cs->room_id);
+    snprintf(password, sizeof password, "%s", cs->password);
+    pthread_mutex_unlock(&cs->lock);
+
+    if (rejoin) {
+      send_join_room(fd, room, JOIN_HAS_TOKEN, NULL, token);
+    } else if (create) {
+      send_create_room(fd, ROOM_ALLOW_SPECTATORS, password);
+    } else {
+      send_join_room(fd, room, spectate ? JOIN_AS_SPECTATOR : 0, password, NULL);
+    }
+    break;
+  }
+
+  case MSG_JOINED: {
+    char room_id[ROOM_ID_BUF_LEN];
+    uint8_t token[TOKEN_SIZE], flags;
+    Role role;
+    if (!decode_joined(msg_buf, msg_len, room_id, &role, token, &flags)) {
+      return;
+    }
+
+    bool seated = role != ROLE_SPECTATOR;
+
+    pthread_mutex_lock(&cs->lock);
+    memcpy(cs->token, token, TOKEN_SIZE);
+    cs->has_token = seated;
+    snprintf(cs->view.room_id, sizeof cs->view.room_id, "%s", room_id);
+    cs->view.spectator = !seated;
+    if (seated) {
+      cs->view.my_color = ROLE_COLOR(role);
+    }
+    cs->view.joined = true;
+    cs->view.reconnecting = false;
+    cs->view.reconnect_started_ms = 0;
+    cs->view.error_code = ERR_NONE;
+
+    memset(cs->view.peer_present, 0, sizeof cs->view.peer_present);
+    memset(cs->view.peer_vacated_ms, 0, sizeof cs->view.peer_vacated_ms);
+    cs->view.spectators = 0;
+    pthread_mutex_unlock(&cs->lock);
+    break;
+  }
+
+  case MSG_STATE: {
+    Game game;
+    if (!decode_state(msg_buf, msg_len, &game)) {
+      return;
+    }
+
+    pthread_mutex_lock(&cs->lock);
+    cs->view.game = game;
+    cs->view.has_state = true;
+    cs->view.game_over = false;
+    cs->view.error_code = ERR_NONE;
+    pthread_mutex_unlock(&cs->lock);
+    break;
+  }
+
+  case MSG_GAME_OVER: {
+    GameResult result;
+    if (!decode_game_over(msg_buf, msg_len, &result)) {
+      return;
+    }
+
+    pthread_mutex_lock(&cs->lock);
+    cs->view.result = result;
+    cs->view.game_over = true;
+    pthread_mutex_unlock(&cs->lock);
+    break;
+  }
+
+  case MSG_ERROR: {
+    uint8_t code, context;
+    if (!decode_error(msg_buf, msg_len, &code, &context)) {
+      return;
+    }
+
+    pthread_mutex_lock(&cs->lock);
+    cs->view.error_code = code;
+    cs->view.error_context = context;
+    // The seat is gone, so there is nothing left to reclaim.
+    if (code == ERR_BAD_TOKEN) {
+      cs->has_token = false;
+      cs->stopped = true;
       cs->view.reconnecting = false;
-      cs->view.reconnect_started_ms = 0;
-      cs->view.error_code = ERR_NONE;
+    }
+    pthread_mutex_unlock(&cs->lock);
+    break;
+  }
 
-      memset(cs->view.peer_present, 0, sizeof cs->view.peer_present);
-      memset(cs->view.peer_vacated_ms, 0, sizeof cs->view.peer_vacated_ms);
-      cs->view.spectators = 0;
-      pthread_mutex_unlock(&cs->lock);
-      break;
+  case MSG_PEER_JOINED:
+  case MSG_PEER_REJOINED: {
+    Role role;
+    if (!decode_peer(msg_buf, msg_len, &role)) {
+      return;
     }
 
-    case MSG_STATE: {
-      Game game;
-      if (!decode_state(msg_buf, msg_len, &game)) return;
+    pthread_mutex_lock(&cs->lock);
+    if (role == ROLE_SPECTATOR) {
+      cs->view.spectators++;
+    } else {
+      cs->view.peer_present[role] = true;
+      cs->view.peer_vacated_ms[role] = 0;
+    }
+    pthread_mutex_unlock(&cs->lock);
+    break;
+  }
 
-      pthread_mutex_lock(&cs->lock);
-      cs->view.game = game;
-      cs->view.has_state = true;
-      cs->view.game_over = false;
-      cs->view.error_code = ERR_NONE;
-      pthread_mutex_unlock(&cs->lock);
-      break;
+  case MSG_PEER_LEFT: {
+    Role role;
+    if (!decode_peer(msg_buf, msg_len, &role)) {
+      return;
     }
 
-    case MSG_GAME_OVER: {
-      GameResult result;
-      if (!decode_game_over(msg_buf, msg_len, &result)) return;
-
-      pthread_mutex_lock(&cs->lock);
-      cs->view.result = result;
-      cs->view.game_over = true;
-      pthread_mutex_unlock(&cs->lock);
-      break;
-    }
-
-    case MSG_ERROR: {
-      uint8_t code, context;
-      if (!decode_error(msg_buf, msg_len, &code, &context)) return;
-
-      pthread_mutex_lock(&cs->lock);
-      cs->view.error_code = code;
-      cs->view.error_context = context;
-      // The seat is gone, so there is nothing left to reclaim.
-      if (code == ERR_BAD_TOKEN) {
-        cs->has_token = false;
-        cs->stopped = true;
-        cs->view.reconnecting = false;
+    pthread_mutex_lock(&cs->lock);
+    if (role == ROLE_SPECTATOR) {
+      if (cs->view.spectators > 0) {
+        cs->view.spectators--;
       }
-      pthread_mutex_unlock(&cs->lock);
-      break;
+    } else {
+      cs->view.peer_present[role] = false;
+      cs->view.peer_vacated_ms[role] = 0;
+    }
+    pthread_mutex_unlock(&cs->lock);
+    break;
+  }
+
+  case MSG_PEER_DISCONNECTED: {
+    Role role;
+    uint16_t grace_secs;
+    if (!decode_peer_disconnected(msg_buf, msg_len, &role, &grace_secs)) {
+      return;
+    }
+    if (role == ROLE_SPECTATOR) {
+      return;
     }
 
-    case MSG_PEER_JOINED:
-    case MSG_PEER_REJOINED: {
-      Role role;
-      if (!decode_peer(msg_buf, msg_len, &role)) return;
+    pthread_mutex_lock(&cs->lock);
+    cs->view.grace_secs = grace_secs;
+    cs->view.peer_vacated_ms[role] = now_ms();
+    pthread_mutex_unlock(&cs->lock);
+    break;
+  }
 
-      pthread_mutex_lock(&cs->lock);
-      if (role == ROLE_SPECTATOR) {
-        cs->view.spectators++;
-      } else {
-        cs->view.peer_present[role] = true;
-        cs->view.peer_vacated_ms[role] = 0;
-      }
-      pthread_mutex_unlock(&cs->lock);
-      break;
-    }
-
-    case MSG_PEER_LEFT: {
-      Role role;
-      if (!decode_peer(msg_buf, msg_len, &role)) return;
-
-      pthread_mutex_lock(&cs->lock);
-      if (role == ROLE_SPECTATOR) {
-        if (cs->view.spectators > 0) cs->view.spectators--;
-      } else {
-        cs->view.peer_present[role] = false;
-        cs->view.peer_vacated_ms[role] = 0;
-      }
-      pthread_mutex_unlock(&cs->lock);
-      break;
-    }
-
-    case MSG_PEER_DISCONNECTED: {
-      Role role;
-      uint16_t grace_secs;
-      if (!decode_peer_disconnected(msg_buf, msg_len, &role, &grace_secs)) return;
-      if (role == ROLE_SPECTATOR) return;
-
-      pthread_mutex_lock(&cs->lock);
-      cs->view.grace_secs = grace_secs;
-      cs->view.peer_vacated_ms[role] = now_ms();
-      pthread_mutex_unlock(&cs->lock);
-      break;
-    }
-
-    default:
-      break;
+  default:
+    break;
   }
 }
 
 // Returns when the socket dies or we are told to quit.
 static void session(ClientState *cs, int fd) {
   for (;;) {
-    if (should_quit(cs)) return;
+    if (should_quit(cs)) {
+      return;
+    }
 
     struct pollfd p = { .fd = fd, .events = POLLIN };
     int ready = poll(&p, 1, 50);
-    if (ready < 0) return;
+    if (ready < 0) {
+      return;
+    }
 
     if (ready > 0) {
       uint8_t msg_type, msg_buf[MAX_PAYLOAD];
       uint16_t msg_len;
-      if (!receive_msg(fd, &msg_type, msg_buf, &msg_len, sizeof msg_buf)) return;
+      if (!receive_msg(fd, &msg_type, msg_buf, &msg_len, sizeof msg_buf)) {
+        return;
+      }
       handle_server_msg(cs, fd, msg_type, msg_buf, msg_len);
     }
-    if (!flush_outbox(cs, fd)) return;
+    if (!flush_outbox(cs, fd)) {
+      return;
+    }
   }
 }
 
@@ -267,7 +309,9 @@ void *network_thread(void *arg) {
 
   while (!should_quit(cs) && !stop_reconnecting(cs)) {
     backoff_sleep(cs, delay_ms);
-    if (should_quit(cs)) break;
+    if (should_quit(cs)) {
+      break;
+    }
 
     int fd = connect_to(SERVER_HOST, PORT);
     if (fd < 0) {
@@ -311,21 +355,29 @@ static void usage(const char *argv0) {
 // so a code typed in lower case is corrected rather than refused.
 static void copy_room_id(char *dst, const char *src) {
   size_t i = 0;
-  for (; src[i] != '\0' && i < ROOM_ID_LEN; i++) dst[i] = (char)toupper((unsigned char)src[i]);
+  for (; src[i] != '\0' && i < ROOM_ID_LEN; i++) {
+    dst[i] = (char)toupper((unsigned char)src[i]);
+  }
   dst[i] = '\0';
 }
 
 static void parse_args(ClientState *cs, int argc, char **argv) {
   int next = 2;
 
-  if (argc < 2) usage(argv[0]);
+  if (argc < 2) {
+    usage(argv[0]);
+  }
 
   if (strcmp(argv[1], "--create") == 0) {
     cs->intent = INTENT_CREATE;
   } else if (strcmp(argv[1], "--join") == 0) {
     cs->intent = INTENT_JOIN;
-    if (argc < 3) usage(argv[0]);
-    if (strlen(argv[2]) != ROOM_ID_LEN) usage(argv[0]);
+    if (argc < 3) {
+      usage(argv[0]);
+    }
+    if (strlen(argv[2]) != ROOM_ID_LEN) {
+      usage(argv[0]);
+    }
     copy_room_id(cs->room_id, argv[2]);
     next = 3;
   } else {
@@ -336,7 +388,9 @@ static void parse_args(ClientState *cs, int argc, char **argv) {
     if (strcmp(argv[next], "--spectate") == 0) {
       cs->spectate = true;
     } else if (cs->password[0] == '\0') {
-      if (strlen(argv[next]) > MAX_PASSWORD_LEN) usage(argv[0]);
+      if (strlen(argv[next]) > MAX_PASSWORD_LEN) {
+        usage(argv[0]);
+      }
       snprintf(cs->password, sizeof cs->password, "%s", argv[next]);
     } else {
       usage(argv[0]);
@@ -345,13 +399,15 @@ static void parse_args(ClientState *cs, int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
-  if (!proto_self_check()) exit(EXIT_FAILURE);
+  if (!proto_self_check()) {
+    exit(EXIT_FAILURE);
+  }
   signal(SIGPIPE, SIG_IGN);
 
-  ClientState cs = {0};
+  ClientState cs = { 0 };
   parse_args(&cs, argc, argv);
   pthread_mutex_init(&cs.lock, NULL);
-  
+
   // The network thread owns the socket, including the first connection.
   cs.fd = -1;
 
@@ -369,7 +425,9 @@ int main(int argc, char **argv) {
   cs.quit = true;
   int fd = cs.fd;
   pthread_mutex_unlock(&cs.lock);
-  if (fd >= 0) shutdown(fd, SHUT_RDWR);
+  if (fd >= 0) {
+    shutdown(fd, SHUT_RDWR);
+  }
 
   pthread_join(net, NULL);
   pthread_mutex_destroy(&cs.lock);

@@ -4,7 +4,7 @@
 
 void init_board(Game *g) {
   static const Piece back_rank[8] = { ROOK, KNIGHT, BISHOP, QUEEN, KING, BISHOP, KNIGHT, ROOK };
-  *g = (Game){0};
+  *g = (Game){ 0 };
 
   for (int file = 0; file < 8; file++) {
     g->board[file] = back_rank[file] | COLOR_WHITE;
@@ -23,10 +23,18 @@ void init_board(Game *g) {
 
 static void revoke_rook_right(Game *g, int sq) {
   switch (sq) {
-    case 0:  g->can_castle[COLOR_INDEX(COLOR_WHITE)][CASTLE_QUEEN] = false; break;
-    case 7:  g->can_castle[COLOR_INDEX(COLOR_WHITE)][CASTLE_KING]  = false; break;
-    case 56: g->can_castle[COLOR_INDEX(COLOR_BLACK)][CASTLE_QUEEN] = false; break;
-    case 63: g->can_castle[COLOR_INDEX(COLOR_BLACK)][CASTLE_KING]  = false; break;
+  case 0:
+    g->can_castle[COLOR_INDEX(COLOR_WHITE)][CASTLE_QUEEN] = false;
+    break;
+  case 7:
+    g->can_castle[COLOR_INDEX(COLOR_WHITE)][CASTLE_KING] = false;
+    break;
+  case 56:
+    g->can_castle[COLOR_INDEX(COLOR_BLACK)][CASTLE_QUEEN] = false;
+    break;
+  case 63:
+    g->can_castle[COLOR_INDEX(COLOR_BLACK)][CASTLE_KING] = false;
+    break;
   }
 }
 
@@ -46,7 +54,9 @@ void apply_move(Game *g, Move m) {
 
   if (type == PAWN && rank_of(m.to) == promotion_rank(color)) {
     int promo = TYPE(m.promotion);
-    if (promo != QUEEN && promo != ROOK && promo != BISHOP && promo != KNIGHT) promo = QUEEN;
+    if (promo != QUEEN && promo != ROOK && promo != BISHOP && promo != KNIGHT) {
+      promo = QUEEN;
+    }
     g->board[m.to] = promo | color;
   }
 
@@ -54,7 +64,7 @@ void apply_move(Game *g, Move m) {
     int home = rank_of(m.from);
     bool kingside = file_of(m.to) == 6;
     int rook_from = square_of(home, kingside ? 7 : 0);
-    int rook_to   = square_of(home, kingside ? 5 : 3);
+    int rook_to = square_of(home, kingside ? 5 : 3);
     g->board[rook_to] = g->board[rook_from];
     g->board[rook_from] = EMPTY;
   }
@@ -67,13 +77,19 @@ void apply_move(Game *g, Move m) {
   revoke_rook_right(g, m.to);
 
   g->en_passant_square = NO_SQUARE;
-  if (type == PAWN && abs(rank_of(m.to) - rank_of(m.from)) == 2)
+  if (type == PAWN && abs(rank_of(m.to) - rank_of(m.from)) == 2) {
     g->en_passant_square = square_of(rank_of(m.from) + pawn_dir(color), file_of(m.from));
+  }
 
-  if (type == PAWN || capture) g->halfmove_clock = 0;
-  else g->halfmove_clock++;
+  if (type == PAWN || capture) {
+    g->halfmove_clock = 0;
+  } else {
+    g->halfmove_clock++;
+  }
 
-  if (color == COLOR_BLACK) g->fullmove_number++;
+  if (color == COLOR_BLACK) {
+    g->fullmove_number++;
+  }
 
   g->turn = OTHER_COLOR(g->turn);
 }

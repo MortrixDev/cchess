@@ -12,10 +12,12 @@ bool read_full(int fd, void *buf, size_t n) {
   uint8_t *p = buf;
   while (n > 0) {
     ssize_t r = read(fd, p, n);
-    if (r < 0 && errno == EINTR)
-        continue;
-    if (r <= 0)
-        return false;
+    if (r < 0 && errno == EINTR) {
+      continue;
+    }
+    if (r <= 0) {
+      return false;
+    }
     p += r;
     n -= r;
   }
@@ -26,10 +28,12 @@ bool write_full(int fd, const void *buf, size_t n) {
   const uint8_t *p = buf;
   while (n > 0) {
     ssize_t w = write(fd, p, n);
-    if (w < 0 && errno == EINTR)
-        continue;
-    if (w <= 0)
-        return false;
+    if (w < 0 && errno == EINTR) {
+      continue;
+    }
+    if (w <= 0) {
+      return false;
+    }
     p += w;
     n -= w;
   }
@@ -40,17 +44,23 @@ int connect_to(const char *host, int port) {
   char port_str[8];
   snprintf(port_str, sizeof port_str, "%d", port);
 
-  struct addrinfo hints = {0}, *res, *rp;
+  struct addrinfo hints = { 0 }, *res, *rp;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
 
-  if (getaddrinfo(host, port_str, &hints, &res) != 0) return -1;
+  if (getaddrinfo(host, port_str, &hints, &res) != 0) {
+    return -1;
+  }
 
   int fd = -1;
   for (rp = res; rp; rp = rp->ai_next) {
     fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (fd < 0) continue;
-    if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+    if (fd < 0) {
+      continue;
+    }
+    if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) {
+      break;
+    }
     close(fd);
     fd = -1;
   }
@@ -59,7 +69,7 @@ int connect_to(const char *host, int port) {
 }
 
 int listen_on(int port, int backlog) {
-  struct sockaddr_in listen_address = {0};
+  struct sockaddr_in listen_address = { 0 };
   int opt = 1;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
 

@@ -1,0 +1,23 @@
+BasedOnStyle: LLVM
+IndentWidth: 2
+ContinuationIndentWidth: 4
+ColumnLimit: 100
+BreakBeforeBraces: Attach
+PointerAlignment: Right
+InsertBraces: true
+SeparateDefinitionBlocks: Always
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortEnumsOnASingleLine: false
+Cpp11BracedListStyle: false
+AlignConsecutiveShortCaseStatements:
+  Enabled: true
+IncludeBlocks: Regroup
+SortIncludes: true
+IncludeCategories:
+  - Regex: '^<'
+    Priority: 1
+  - Regex: '^"'
+    Priority: 2
+AlignEscapedNewlines: LeftWithLastLine

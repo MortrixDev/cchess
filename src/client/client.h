@@ -1,13 +1,13 @@
 #ifndef CLIENT_CLIENT_H
 #define CLIENT_CLIENT_H
 
-#include "chess/board.h"
-#include "chess/rules.h"
-#include "proto/proto.h"
-
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "chess/board.h"
+#include "chess/rules.h"
+#include "proto/proto.h"
 
 typedef struct View {
   bool connected;

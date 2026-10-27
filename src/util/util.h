@@ -5,7 +5,7 @@
 #include <time.h>
 
 // Number of elements in an array (doesn't work for pointers).
-#define COUNT(a) ((int)(sizeof (a) / sizeof (a)[0]))
+#define COUNT(a) ((int)(sizeof(a) / sizeof(a)[0]))
 
 static inline int64_t now_ms(void) {
   struct timespec ts;

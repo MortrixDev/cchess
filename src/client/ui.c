@@ -1,32 +1,33 @@
 #include "client/ui.h"
+
+#include <raylib.h>
+
 #include "chess/board.h"
 #include "chess/movegen.h"
 #include "chess/rules.h"
 #include "client/client.h"
 #include "proto/proto.h"
 
-#include <raylib.h>
-
 #define STATUS_BAR_HEIGHT 36
-#define CHAT_MIN_WIDTH    220
-#define BORDER_SIZE       20
-#define ACCENT_SIZE       4
-#define PIECE_SLOTS       16
-#define FONT_ATLAS_SIZE   64
-#define STATUS_FONT_SIZE  20
+#define CHAT_MIN_WIDTH 220
+#define BORDER_SIZE 20
+#define ACCENT_SIZE 4
+#define PIECE_SLOTS 16
+#define FONT_ATLAS_SIZE 64
+#define STATUS_FONT_SIZE 20
 
 #define HEX(h) { ((h) >> 16) & 0xFF, ((h) >> 8) & 0xFF, (h) & 0xFF, 0xFF }
 #define HEXA(h, a) { ((h) >> 16) & 0xFF, ((h) >> 8) & 0xFF, (h) & 0xFF, (a) }
-static const Color BOARD_LIGHT     = HEX(0xF0D9B5);
-static const Color BOARD_DARK      = HEX(0xB58863);
-static const Color BOARD_BORDER    = HEX(0x5C3A1E);
-static const Color BORDER_TEXT     = HEX(0xE8D5B7);
-static const Color ACCENT_LIGHT    = HEX(0xE2C79F);
-static const Color ACCENT_DARK     = HEX(0xA37752);
+static const Color BOARD_LIGHT = HEX(0xF0D9B5);
+static const Color BOARD_DARK = HEX(0xB58863);
+static const Color BOARD_BORDER = HEX(0x5C3A1E);
+static const Color BORDER_TEXT = HEX(0xE8D5B7);
+static const Color ACCENT_LIGHT = HEX(0xE2C79F);
+static const Color ACCENT_DARK = HEX(0xA37752);
 
 static const Color SQUARE_SELECTED = HEXA(0xE07B2A, 110);
-static const Color SQUARE_TARGET   = HEXA(0xF2D04A, 110);
-static const Color SQUARE_ATTACK   = HEXA(0xCC3B2F, 150);
+static const Color SQUARE_TARGET = HEXA(0xF2D04A, 110);
+static const Color SQUARE_ATTACK = HEXA(0xCC3B2F, 150);
 
 typedef struct {
   Rectangle board;
@@ -53,12 +54,16 @@ static Layout compute_layout(int w, int h) {
   l.status = cut_bottom(&rest, STATUS_BAR_HEIGHT);
 
   float chat_w = w * 0.25f;
-  if (chat_w < CHAT_MIN_WIDTH) chat_w = CHAT_MIN_WIDTH;
+  if (chat_w < CHAT_MIN_WIDTH) {
+    chat_w = CHAT_MIN_WIDTH;
+  }
 
   float avail_w = rest.width - chat_w - 2 * BORDER_SIZE;
   float avail_h = rest.height - 2 * BORDER_SIZE;
   int sq = (int)(avail_w < avail_h ? avail_w : avail_h) / 8;
-  if (sq < 1) sq = 1;
+  if (sq < 1) {
+    sq = 1;
+  }
   float size = sq * 8;
   float outer = size + 2 * BORDER_SIZE;
 
@@ -91,17 +96,23 @@ static void load_assets(void) {
     assets.piece_images[b] = LoadImage(TextFormat("%sassets/pieces/b%c.png", dir, names[type]));
   }
 
-  assets.font = LoadFontEx(TextFormat("%sassets/fonts/Inter-Medium.ttf", dir),
-                           FONT_ATLAS_SIZE, NULL, 0);
+  assets.font =
+      LoadFontEx(TextFormat("%sassets/fonts/Inter-Medium.ttf", dir), FONT_ATLAS_SIZE, NULL, 0);
   SetTextureFilter(assets.font.texture, TEXTURE_FILTER_BILINEAR);
 }
 
 static void rebuild_piece_textures(int sq) {
-  if (sq == assets.piece_size || sq <= 0) return;
+  if (sq == assets.piece_size || sq <= 0) {
+    return;
+  }
 
   for (int i = 0; i < PIECE_SLOTS; i++) {
-    if (assets.piece_images[i].data == NULL) continue;
-    if (assets.pieces[i].id != 0) UnloadTexture(assets.pieces[i]);
+    if (assets.piece_images[i].data == NULL) {
+      continue;
+    }
+    if (assets.pieces[i].id != 0) {
+      UnloadTexture(assets.pieces[i]);
+    }
 
     Image img = ImageCopy(assets.piece_images[i]);
     ImageResize(&img, sq, sq);
@@ -119,8 +130,12 @@ static void unload_assets(void) {
   UnloadFont(assets.font);
 
   for (int i = 0; i < PIECE_SLOTS; i++) {
-    if (assets.pieces[i].id != 0) UnloadTexture(assets.pieces[i]);
-    if (assets.piece_images[i].data != NULL) UnloadImage(assets.piece_images[i]);
+    if (assets.pieces[i].id != 0) {
+      UnloadTexture(assets.pieces[i]);
+    }
+    if (assets.piece_images[i].data != NULL) {
+      UnloadImage(assets.piece_images[i]);
+    }
   }
 }
 
@@ -136,7 +151,9 @@ static void select_square(const Game *g, int sq) {
   generate_legal_destinations(g, sq, input.targets);
 }
 
-typedef struct { int ox, oy, sq; } BoardGeometry;
+typedef struct {
+  int ox, oy, sq;
+} BoardGeometry;
 
 static BoardGeometry compute_board_geometry(Rectangle rect) {
   BoardGeometry bg;
@@ -148,10 +165,14 @@ static BoardGeometry compute_board_geometry(Rectangle rect) {
 
 static int square_at(Vector2 m, bool is_white, Rectangle board) {
   BoardGeometry bg = compute_board_geometry(board);
-  if (m.x < bg.ox || m.y < bg.oy) return -1;
+  if (m.x < bg.ox || m.y < bg.oy) {
+    return -1;
+  }
   int col = (int)(m.x - bg.ox) / bg.sq;
   int row = (int)(m.y - bg.oy) / bg.sq;
-  if (col > 7 || row > 7) return -1;
+  if (col > 7 || row > 7) {
+    return -1;
+  }
   int file = is_white ? col : 7 - col;
   int rank = is_white ? 7 - row : row;
   return rank * 8 + file;
@@ -162,12 +183,14 @@ static void draw_piece(Piece p, int x, int y) {
 }
 
 static void draw_border(Rectangle board) {
-  DrawRectangleRec((Rectangle){
-    board.x - BORDER_SIZE,
-    board.y - BORDER_SIZE,
-    board.width + 2 * BORDER_SIZE,
-    board.height + 2 * BORDER_SIZE,
-  }, BOARD_BORDER);
+  DrawRectangleRec(
+      (Rectangle){
+          board.x - BORDER_SIZE,
+          board.y - BORDER_SIZE,
+          board.width + 2 * BORDER_SIZE,
+          board.height + 2 * BORDER_SIZE,
+      },
+      BOARD_BORDER);
 }
 
 static void draw_coordinates(Rectangle board, bool is_white) {
@@ -211,42 +234,49 @@ static void draw_board(const Game *g, bool is_white, Input *in, Rectangle rect) 
       int inner = bg.sq - 2 * ACCENT_SIZE;
 
       DrawRectangle(x, y, bg.sq, bg.sq, light ? ACCENT_LIGHT : ACCENT_DARK);
-      if (inner > 0)
+      if (inner > 0) {
         DrawRectangle(x + ACCENT_SIZE, y + ACCENT_SIZE, inner, inner,
                       light ? BOARD_LIGHT : BOARD_DARK);
+      }
 
-      if (idx == in->selected)
+      if (idx == in->selected) {
         DrawRectangle(x, y, bg.sq, bg.sq, SQUARE_SELECTED);
-      else if (in->targets[idx]) {
-        bool capture = !IS_EMPTY(g->board[idx]) ||
-                       (pawn_selected && idx == g->en_passant_square);
+      } else if (in->targets[idx]) {
+        bool capture = !IS_EMPTY(g->board[idx]) || (pawn_selected && idx == g->en_passant_square);
         DrawRectangle(x, y, bg.sq, bg.sq, capture ? SQUARE_ATTACK : SQUARE_TARGET);
       }
 
       Piece p = g->board[idx];
-      if (!IS_EMPTY(p)) draw_piece(p, x, y);
+      if (!IS_EMPTY(p)) {
+        draw_piece(p, x, y);
+      }
     }
   }
 }
 
 static const char *reason_text(uint8_t reason) {
   switch (reason) {
-    case REASON_CHECKMATE:             return "by checkmate";
-    case REASON_STALEMATE:             return "by stalemate";
-    case REASON_RESIGN:                return "by resignation";
-    case REASON_DISCONNECT:            return "by disconnection";
-    case REASON_FIFTY_MOVES:           return "by the fifty-move rule";
-    case REASON_INSUFFICIENT_MATERIAL: return "by insufficient material";
+  case REASON_CHECKMATE:
+    return "by checkmate";
+  case REASON_STALEMATE:
+    return "by stalemate";
+  case REASON_RESIGN:
+    return "by resignation";
+  case REASON_DISCONNECT:
+    return "by disconnection";
+  case REASON_FIFTY_MOVES:
+    return "by the fifty-move rule";
+  case REASON_INSUFFICIENT_MATERIAL:
+    return "by insufficient material";
   }
   return NULL;
 }
 
 static const char *result_text(const View *v) {
-  const char *winner =
-      v->result.result == RESULT_WHITE_WINS ? "White wins"
-    : v->result.result == RESULT_BLACK_WINS ? "Black wins"
-    : v->result.result == RESULT_DRAW       ? "Draw"
-    : "Game over";
+  const char *winner = v->result.result == RESULT_WHITE_WINS   ? "White wins"
+                       : v->result.result == RESULT_BLACK_WINS ? "Black wins"
+                       : v->result.result == RESULT_DRAW       ? "Draw"
+                                                               : "Game over";
 
   const char *reason = reason_text(v->result.reason);
   return reason ? TextFormat("%s %s", winner, reason) : winner;
@@ -260,16 +290,16 @@ static const char *error_text(const View *v) {
 
 static void draw_status(const View *v, Rectangle r) {
   DrawRectangleRec(r, (Color){ 30, 30, 30, 255 });
-  const char *text =
-      !v->connected       ? "Disconnected"
-    : v->error_code       ? error_text(v)
-    : !v->joined          ? "Connecting..."
-    : v->game_over        ? result_text(v)
-    : !v->has_state       ? TextFormat("Room %s - waiting for opponent", v->room_id)
-    : v->spectator        ? (v->game.turn == COLOR_WHITE ? "White to move" : "Black to move")
-    : v->game.turn == v->my_color ? "Your move" : "Opponent's move";
-  DrawTextEx(assets.font, text,
-             (Vector2){ r.x + 10, r.y + (r.height - STATUS_FONT_SIZE) / 2.0f },
+  const char *text = !v->connected   ? "Disconnected"
+                     : v->error_code ? error_text(v)
+                     : !v->joined    ? "Connecting..."
+                     : v->game_over  ? result_text(v)
+                     : !v->has_state ? TextFormat("Room %s - waiting for opponent", v->room_id)
+                     : v->spectator
+                         ? (v->game.turn == COLOR_WHITE ? "White to move" : "Black to move")
+                     : v->game.turn == v->my_color ? "Your move"
+                                                   : "Opponent's move";
+  DrawTextEx(assets.font, text, (Vector2){ r.x + 10, r.y + (r.height - STATUS_FONT_SIZE) / 2.0f },
              STATUS_FONT_SIZE, STATUS_FONT_SIZE / 10.0f, RAYWHITE);
 }
 
@@ -289,10 +319,14 @@ static void handle_input(ClientState *cs, const View *v, Rectangle board) {
     return;
   }
 
-  if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) return;
+  if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    return;
+  }
 
   int sq = square_at(GetMousePosition(), v->my_color == COLOR_WHITE, board);
-  if (sq < 0) return;
+  if (sq < 0) {
+    return;
+  }
 
   if (IS_COLOR(v->game.board[sq], v->my_color)) {
     select_square(&v->game, sq);
@@ -308,7 +342,7 @@ static void handle_input(ClientState *cs, const View *v, Rectangle board) {
 static void render(View *v, Layout *l, const Input *in) {
   int w = GetScreenWidth();
   int h = GetScreenHeight();
-  
+
   rebuild_piece_textures((int)l->board.width / 8);
 
   BeginDrawing();
@@ -329,17 +363,17 @@ void run_ui(ClientState *cs) {
   SetExitKey(KEY_NULL);
 
   load_assets();
-  
+
   while (!WindowShouldClose()) {
     pthread_mutex_lock(&cs->lock);
     View snapshot = cs->view;
     pthread_mutex_unlock(&cs->lock);
-    
+
     Layout l = compute_layout(GetScreenWidth(), GetScreenHeight());
-    handle_input(cs, &snapshot, l.board);    
+    handle_input(cs, &snapshot, l.board);
     render(&snapshot, &l, &input);
   }
-  
+
   unload_assets();
   CloseWindow();
 }

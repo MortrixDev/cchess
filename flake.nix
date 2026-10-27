@@ -13,6 +13,7 @@
             pkg-config
             gnumake
             bear
+            clang-tools
           ];
         };
       });
