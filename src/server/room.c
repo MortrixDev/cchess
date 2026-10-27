@@ -78,6 +78,15 @@ Room *room_create(RoomTable *t, const char *password, uint8_t flags) {
   return NULL;
 }
 
+bool room_claim_seat(Room *r, Role role) {
+  Seat *seat = &r->seats[role];
+  if (getrandom(seat->token, TOKEN_SIZE, 0) != TOKEN_SIZE) return false;
+
+  seat->claimed = true;
+  seat->vacated_ms = 0;
+  return true;
+}
+
 bool room_password_ok(const Room *r, const char *attempt) {
   return r->password[0] == '\0' || strcmp(r->password, attempt) == 0;
 }
@@ -86,4 +95,46 @@ bool room_coin_flip(void) {
   uint8_t b;
   if (getrandom(&b, 1, 0) != 1) return false;
   return b & 1;
+}
+
+static bool seat_waiting(const Seat *seat) {
+  return seat->claimed && seat->vacated_ms != 0;
+}
+
+bool room_seat_expired(const Room *r, Role role, int64_t now) {
+  const Seat *seat = &r->seats[role];
+  return seat_waiting(seat) && now - seat->vacated_ms >= GRACE_SECS * 1000;
+}
+
+int64_t room_table_next_expiry(const RoomTable *t) {
+  int64_t soonest = -1;
+  for (int i = 0; i < MAX_ROOMS; i++) {
+    const Room *r = &t->rooms[i];
+    if (!r->used) continue;
+
+    for (int role = ROLE_WHITE; role <= ROLE_BLACK; role++) {
+      if (!seat_waiting(&r->seats[role])) continue;
+
+      int64_t at = r->seats[role].vacated_ms + GRACE_SECS * 1000;
+      if (soonest < 0 || at < soonest) soonest = at;
+    }
+  }
+  return soonest;
+}
+
+void room_release_seat(Room *r, Role role) {
+  r->seats[role] = (Seat){0};
+}
+
+void room_vacate_seat(Room *r, Role role, int64_t now) {
+  r->seats[role].vacated_ms = now;
+}
+
+// -1 when no claimed seat holds this token.
+int room_seat_by_token(const Room *r, const uint8_t *token) {
+  for (int role = ROLE_WHITE; role <= ROLE_BLACK; role++) {
+    const Seat *seat = &r->seats[role];
+    if (seat->claimed && memcmp(seat->token, token, TOKEN_SIZE) == 0) return role;
+  }
+  return -1;
 }

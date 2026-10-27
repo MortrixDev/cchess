@@ -6,6 +6,7 @@
 #include "net/net.h"
 #include "proto/proto.h"
 #include "server/room.h"
+#include "util/util.h"
 
 #include <poll.h>
 #include <stdint.h>
@@ -83,21 +84,28 @@ static GameResult fail(Client *c, ErrorCode code, uint8_t context) {
   return NO_RESULT;
 }
 
-static void seat_creator(Client *c, const Room *r, int room) {
+static ErrorCode seat_creator(Client *c, Room *r, int room) {
   int prefer = ROOM_PREFER(r->flags);
   if (prefer == PREFER_RANDOM) prefer = room_coin_flip() ? PREFER_WHITE : PREFER_BLACK;
 
-  c->role = prefer == PREFER_BLACK ? ROLE_BLACK : ROLE_WHITE;
+  Role role = prefer == PREFER_BLACK ? ROLE_BLACK : ROLE_WHITE;
+  if (!room_claim_seat(r, role)) return ERR_INTERNAL;
+
+  c->role = role;
   c->reached = NEEDS_SEAT;
   c->room = room;
+  return ERR_NONE;
 }
 
-static ErrorCode seat_joiner(Server *s, Client *c, const Room *r, int room, bool as_spectator) {
-  bool white_free = !has_role(s, room, ROLE_WHITE);
-  bool black_free = !has_role(s, room, ROLE_BLACK);
+static ErrorCode seat_joiner(Server *s, Client *c, Room *r, int room, bool as_spectator) {
+  bool white_free = !r->seats[ROLE_WHITE].claimed;
+  bool black_free = !r->seats[ROLE_BLACK].claimed;
 
   if (!as_spectator && (white_free || black_free)) {
-    c->role = white_free ? ROLE_WHITE : ROLE_BLACK;
+    Role role = white_free ? ROLE_WHITE : ROLE_BLACK;
+    if (!room_claim_seat(r, role)) return ERR_INTERNAL;
+
+    c->role = role;
     c->reached = NEEDS_SEAT;
   } else {
     if (!(r->flags & ROOM_ALLOW_SPECTATORS))
@@ -109,6 +117,16 @@ static ErrorCode seat_joiner(Server *s, Client *c, const Room *r, int room, bool
   }
   c->room = room;
   return ERR_NONE;
+}
+
+// Milliseconds until the nearest grace expiry, or -1 to block. Recomputed from
+// an absolute deadline each time, so a spurious wakeup cannot make it drift.
+static int poll_timeout_ms(const Server *s) {
+  int64_t at = room_table_next_expiry(&s->room_table);
+  if (at < 0) return -1;
+
+  int64_t wait = at - now_ms();
+  return wait > 0 ? (int)wait : 0;
 }
 
 static void broadcast(Server *s, int room, uint8_t msg_type, const void *msg_buf, uint16_t msg_len) {
@@ -151,10 +169,39 @@ static GameResult handle_create_room(Server *s, Client *c, const uint8_t *msg_bu
   Room *r = room_create(&s->room_table, password, flags);
   if (r == NULL) return fail(c, ERR_TOO_MANY_ROOMS, MSG_CREATE_ROOM);
 
-  seat_creator(c, r, room_index(s, r));
-  send_joined(c->fd, r->id, c->role, NO_TOKEN, r->flags);
+  ErrorCode err = seat_creator(c, r, room_index(s, r));
+  if (err != ERR_NONE) {
+    room_free(r);
+    return fail(c, err, MSG_CREATE_ROOM);
+  }
+
+  send_joined(c->fd, r->id, c->role, r->seats[c->role].token, r->flags);
   printf("[%s] created, %s\n", r->id, role_name(c->role));
   return NO_RESULT;
+}
+
+static void remove_client(Server *s, int i) {
+  close(s->clients[i].fd);
+  s->clients[i].active = false;
+}
+
+
+static ErrorCode reclaim_seat(Server *s, Client *c, Room *r, int room, Role role) {
+  if (!room_claim_seat(r, role)) return ERR_INTERNAL;
+
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    Client *other = &s->clients[i];
+    if (other->active && other->room == room && other->role == role) {
+      other->room = -1;
+      other->reached = NEEDS_HELLO;
+      remove_client(s, i);
+    }
+  }
+
+  c->role = role;
+  c->reached = NEEDS_SEAT;
+  c->room = room;
+  return ERR_NONE;
 }
 
 static GameResult handle_join_room(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
@@ -167,13 +214,30 @@ static GameResult handle_join_room(Server *s, Client *c, const uint8_t *msg_buf,
 
   Room *r = room_find(&s->room_table, id);
   if (r == NULL) return fail(c, ERR_ROOM_NOT_FOUND, MSG_JOIN_ROOM);
-  if (!room_password_ok(r, password)) return fail(c, ERR_BAD_PASSWORD, MSG_JOIN_ROOM);
 
   int room = room_index(s, r);
-  ErrorCode err = seat_joiner(s, c, r, room, flags & JOIN_AS_SPECTATOR);
-  if (err != ERR_NONE) return fail(c, err, MSG_JOIN_ROOM);
+  bool rejoined = false;
 
-  send_joined(c->fd, r->id, c->role, NO_TOKEN, r->flags);
+  // A token is stronger proof than the password, so it stands on its own. No
+  // match means the grace expired, or the code now belongs to another room:
+  // either way the session is gone, and falling through to a fresh join would
+  // silently hand out a different seat.
+  if (flags & JOIN_HAS_TOKEN) {
+    int role = room_seat_by_token(r, token);
+    if (role < 0) return fail(c, ERR_BAD_TOKEN, MSG_JOIN_ROOM);
+
+    ErrorCode err = reclaim_seat(s, c, r, room, (Role)role);
+    if (err != ERR_NONE) return fail(c, err, MSG_JOIN_ROOM);
+    rejoined = true;
+  } else {
+    if (!room_password_ok(r, password)) return fail(c, ERR_BAD_PASSWORD, MSG_JOIN_ROOM);
+
+    ErrorCode err = seat_joiner(s, c, r, room, flags & JOIN_AS_SPECTATOR);
+    if (err != ERR_NONE) return fail(c, err, MSG_JOIN_ROOM);
+  }
+
+  const uint8_t *issued = c->role == ROLE_SPECTATOR ? NO_TOKEN : r->seats[c->role].token;
+  send_joined(c->fd, r->id, c->role, issued, r->flags);
 
   uint8_t buf[MAX_PAYLOAD];
   for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -181,7 +245,8 @@ static GameResult handle_join_room(Server *s, Client *c, const uint8_t *msg_buf,
     if (other->active && other->room == room && other != c)
       send_msg(c->fd, MSG_PEER_JOINED, buf, encode_peer(buf, other->role));
   }
-  broadcast_except(s, room, c, MSG_PEER_JOINED, buf, encode_peer(buf, c->role));
+  broadcast_except(s, room, c, rejoined ? MSG_PEER_REJOINED : MSG_PEER_JOINED,
+                   buf, encode_peer(buf, c->role));
 
   if (r->started) {
     send_state(c->fd, &r->game);
@@ -189,8 +254,18 @@ static GameResult handle_join_room(Server *s, Client *c, const uint8_t *msg_buf,
   } else {
     maybe_start(s, room);
   }
-  printf("[%s] %s joined\n", r->id, role_name(c->role));
+  printf("[%s] %s %s\n", r->id, role_name(c->role), rejoined ? "rejoined" : "joined");
   return NO_RESULT;
+}
+
+static bool free_if_quiet(Server *s, int room) {
+  Room *r = &s->room_table.rooms[room];
+  if (r->seats[ROLE_WHITE].claimed || r->seats[ROLE_BLACK].claimed) return false;
+  if (!room_empty(s, room)) return false;
+
+  printf("[%s] closed\n", r->id);
+  room_free(r);
+  return true;
 }
 
 static GameResult leave_room(Server *s, Client *c) {
@@ -202,15 +277,12 @@ static GameResult leave_room(Server *s, Client *c) {
 
   c->room = -1;
   c->reached = NEEDS_HELLO;
+  if (was_player) room_release_seat(r, role);
 
   uint8_t buf[MAX_PAYLOAD];
   broadcast(s, room, MSG_PEER_LEFT, buf, encode_peer(buf, role));
 
-  if (room_empty(s, room)) {
-    printf("[%s] closed\n", r->id);
-    room_free(r);
-    return NO_RESULT;
-  }
+  if (free_if_quiet(s, room)) return NO_RESULT;
 
   if (live && was_player)
     return (GameResult){ WIN_FOR(OTHER_COLOR(ROLE_COLOR(role))), REASON_DISCONNECT };
@@ -218,9 +290,25 @@ static GameResult leave_room(Server *s, Client *c) {
   return NO_RESULT;
 }
 
-static void remove_client(Server *s, int i) {
-  close(s->clients[i].fd);
-  s->clients[i].active = false;
+static void drop_from_room(Server *s, Client *c) {
+  int room = c->room;
+  Room *r = &s->room_table.rooms[room];
+  Role role = c->role;
+
+  c->room = -1;
+  c->reached = NEEDS_HELLO;
+
+  uint8_t buf[MAX_PAYLOAD];
+  if (role == ROLE_SPECTATOR) {
+    broadcast(s, room, MSG_PEER_LEFT, buf, encode_peer(buf, role));
+    free_if_quiet(s, room);
+    return;
+  }
+
+  room_vacate_seat(r, role, now_ms());
+  broadcast(s, room, MSG_PEER_DISCONNECTED, buf,
+            encode_peer_disconnected(buf, role, GRACE_SECS));
+  printf("[%s] %s dropped\n", r->id, role_name(role));
 }
 
 static void accept_client(Server *s) {
@@ -269,13 +357,13 @@ static ErrorCode check_msg(const Server *s, const Client *c, const MsgSpec *spec
   return ERR_NONE;
 }
 
-static GameResult handle_hello(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
+static GameResult handle_hello(Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
   uint16_t version;
   if (!decode_hello(msg_buf, msg_len, &version)) return fail(c, ERR_MALFORMED, MSG_HELLO);
   if (version != PROTO_VERSION) return fail(c, ERR_VERSION_MISMATCH, MSG_HELLO);
 
   c->reached = NEEDS_HELLO;
-  send_hello_ok(c->fd, MAX_SPECTATORS, 0);
+  send_hello_ok(c->fd, MAX_SPECTATORS, GRACE_SECS);
   return NO_RESULT;
 }
 
@@ -299,11 +387,50 @@ static GameResult handle_resign(Server *s, Client *c) {
 
 static GameResult handle_disconnect(Server *s, int i) {
   Client *c = &s->clients[i];
-  GameResult result = (c->room >= 0) ? leave_room(s, c) : NO_RESULT;
+  if (c->room >= 0) drop_from_room(s, c);
 
   remove_client(s, i);
   printf("disconnected\n");
-  return result;
+  return NO_RESULT;
+}
+
+// Records the first result the game produces and announces it. Later results
+// are ignored: the finished position stands.
+static void finish_game(Server *s, int room, GameResult result) {
+  Room *r = &s->room_table.rooms[room];
+  if (!room_finish(r, result)) return;
+
+  uint8_t buf[MAX_PAYLOAD];
+  broadcast(s, room, MSG_GAME_OVER, buf, encode_game_over(buf, result));
+  printf("[%s] %s by %s\n", r->id, winner_name(result), reason_name(result));
+}
+
+static void expire_seat(Server *s, int room, Role role) {
+  Room *r = &s->room_table.rooms[room];
+  bool live = r->started && !r->over;
+
+  room_release_seat(r, role);
+
+  uint8_t buf[MAX_PAYLOAD];
+  broadcast(s, room, MSG_PEER_LEFT, buf, encode_peer(buf, role));
+  printf("[%s] %s did not come back\n", r->id, role_name(role));
+
+  if (live)
+    finish_game(s, room, (GameResult){ WIN_FOR(OTHER_COLOR(ROLE_COLOR(role))), REASON_DISCONNECT });
+
+  free_if_quiet(s, room);
+}
+
+static void tick(Server *s) {
+  int64_t now = now_ms();
+  for (int i = 0; i < MAX_ROOMS; i++) {
+    Room *r = &s->room_table.rooms[i];
+
+    for (int role = ROLE_WHITE; role <= ROLE_BLACK; role++) {
+      if (!r->used) break;
+      if (room_seat_expired(r, role, now)) expire_seat(s, i, role);
+    }
+  }
 }
 
 static GameResult handle_msg(Server *s, int i) {
@@ -320,7 +447,7 @@ static GameResult handle_msg(Server *s, int i) {
   if (err != ERR_NONE) return fail(c, err, msg_type);
   
   switch (msg_type) {
-    case MSG_HELLO:  return handle_hello(s, c, msg_buf, msg_len);
+    case MSG_HELLO:  return handle_hello(c, msg_buf, msg_len);
     case MSG_MOVE:   return handle_move(s, c, msg_buf, msg_len);
     case MSG_RESIGN: return handle_resign(s, c);
     case MSG_CREATE_ROOM: return handle_create_room(s, c, msg_buf, msg_len);
@@ -328,17 +455,6 @@ static GameResult handle_msg(Server *s, int i) {
     case MSG_LEAVE_ROOM:  return leave_room(s, c);
     default:         return fail(c, ERR_UNKNOWN_MESSAGE, msg_type);
   }
-}
-
-// Records the first result the game produces and announces it. Later results
-// are ignored: the finished position stands.
-static void finish_game(Server *s, int room, GameResult result) {
-  Room *r = &s->room_table.rooms[room];
-  if (!room_finish(r, result)) return;
-
-  uint8_t buf[MAX_PAYLOAD];
-  broadcast(s, room, MSG_GAME_OVER, buf, encode_game_over(buf, result));
-  printf("[%s] %s by %s\n", r->id, winner_name(result), reason_name(result));
 }
 
 void run_server(Server *s) {
@@ -365,7 +481,7 @@ void run_server(Server *s) {
     }
 
     // Block until at least one socket is ready
-    if (poll(fds, n, -1) < 0) continue;
+    if (poll(fds, n, poll_timeout_ms(s)) < 0) continue;
 
     // Handle events
     for (int k = 0; k < n; k++) {
@@ -376,8 +492,12 @@ void run_server(Server *s) {
         int i = owner[k];
         int room = s->clients[i].room;
         GameResult result = handle_msg(s, i);
-        if (room >= 0) finish_game(s, room, result); 
+        if (room >= 0) finish_game(s, room, result);
       }
     }
+
+    // After the ready sockets, so a reconnect arriving in the same wakeup
+    // reclaims its seat before the sweep can expire it.
+    tick(s);
   }
 }

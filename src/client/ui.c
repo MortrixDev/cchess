@@ -297,7 +297,10 @@ static void handle_input(ClientState *cs, const View *v, Rectangle board) {
   if (IS_COLOR(v->game.board[sq], v->my_color)) {
     select_square(&v->game, sq);
   } else if (input.selected >= 0 && input.targets[sq]) {
-    send_move(cs->fd, (Move){ input.selected, sq, EMPTY });
+    pthread_mutex_lock(&cs->lock);
+    cs->pending_move = (Move){ input.selected, sq, EMPTY };
+    cs->has_pending_move = true;
+    pthread_mutex_unlock(&cs->lock);
     select_square(&v->game, -1);
   }
 }

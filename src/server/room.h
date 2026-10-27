@@ -9,6 +9,13 @@
 
 #define MAX_ROOMS      64
 #define MAX_SPECTATORS 10
+#define GRACE_SECS 60
+
+typedef struct {
+  bool claimed;
+  uint8_t token[TOKEN_SIZE];
+  int64_t vacated_ms;
+} Seat;
 
 typedef struct {
   bool used;
@@ -19,6 +26,7 @@ typedef struct {
   bool started;
   bool over;
   GameResult result;
+  Seat seats[2];
 } Room;
 
 typedef struct { Room rooms[MAX_ROOMS]; } RoomTable;
@@ -31,5 +39,11 @@ void room_free(Room *r);
 Room *room_create(RoomTable *t, const char *password, uint8_t flags);
 bool room_password_ok(const Room *r, const char *attempt);
 bool room_coin_flip(void);
+bool room_claim_seat(Room *r, Role role);
+int64_t room_table_next_expiry(const RoomTable *t);
+bool room_seat_expired(const Room *r, Role role, int64_t now);
+void room_release_seat(Room *r, Role role);
+void room_vacate_seat(Room *r, Role role, int64_t now);
+int room_seat_by_token(const Room *r, const uint8_t *token);
 
 #endif

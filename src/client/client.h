@@ -22,6 +22,13 @@ typedef struct View {
   uint16_t grace_secs;
   uint8_t error_code;
   uint8_t error_context;
+
+  bool reconnecting;
+  int64_t reconnect_started_ms;
+
+  bool peer_present[2];
+  int64_t peer_vacated_ms[2];
+  int spectators;
 } View;
 
 // What this client does once the handshake completes.
@@ -34,13 +41,20 @@ typedef struct ClientState {
   pthread_mutex_t lock;
   int fd;
   uint8_t token[TOKEN_SIZE];
+  bool has_token;
 
-  // Set from argv before the network thread starts, read-only thereafter.
   Intent intent;
   char room_id[ROOM_ID_BUF_LEN];
   char password[PASSWORD_BUF_LEN];
   bool spectate;
 
+  Move pending_move;
+  bool has_pending_move;
+  bool pending_resign;
+
+  // Terminal: the seat cannot be reclaimed, so stop reconnecting.
+  bool stopped;
+  bool quit;
   View view;
 } ClientState;
 

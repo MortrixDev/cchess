@@ -117,7 +117,9 @@ bool proto_self_check(void);
   X(16, ERR_GAME_NOT_STARTED, "game has not started")            \
   X(17, ERR_GAME_FINISHED,    "game is over")                    \
   X(18, ERR_NOT_YOUR_TURN,    "not your turn")                   \
-  X(19, ERR_ILLEGAL_MOVE,     "illegal move")
+  X(19, ERR_ILLEGAL_MOVE,     "illegal move")                    \
+  /* server */                                                   \
+  X(20, ERR_INTERNAL,         "server error")
 
 enum {
 #define X(id, name, ...) name = id,
