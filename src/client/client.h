@@ -24,10 +24,23 @@ typedef struct View {
   uint8_t error_context;
 } View;
 
+// What this client does once the handshake completes.
+typedef enum {
+  INTENT_CREATE,
+  INTENT_JOIN,
+} Intent;
+
 typedef struct ClientState {
   pthread_mutex_t lock;
   int fd;
   uint8_t token[TOKEN_SIZE];
+
+  // Set from argv before the network thread starts, read-only thereafter.
+  Intent intent;
+  char room_id[ROOM_ID_BUF_LEN];
+  char password[PASSWORD_BUF_LEN];
+  bool spectate;
+
   View view;
 } ClientState;
 

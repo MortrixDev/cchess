@@ -12,8 +12,21 @@
 #include <stdio.h>
 #include <unistd.h>
 
+static const uint8_t NO_TOKEN[TOKEN_SIZE] = {0};
+
 static Room *client_room(Server *s, const Client *c) {
   return &s->room_table.rooms[c->room];
+}
+
+static int room_index(const Server *s, const Room *r) {
+  return (int)(r - s->room_table.rooms);
+}
+
+static bool room_empty(const Server *s, int room) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (s->clients[i].active && s->clients[i].room == room) return false;
+  }
+  return true;
 }
 
 static bool has_role(const Server *s, int room, Role role) {
@@ -65,11 +78,53 @@ static const char *winner_name(GameResult r) {
   return "game over";
 }
 
+static GameResult fail(Client *c, ErrorCode code, uint8_t context) {
+  send_error(c->fd, code, context);
+  return NO_RESULT;
+}
+
+static void seat_creator(Client *c, const Room *r, int room) {
+  int prefer = ROOM_PREFER(r->flags);
+  if (prefer == PREFER_RANDOM) prefer = room_coin_flip() ? PREFER_WHITE : PREFER_BLACK;
+
+  c->role = prefer == PREFER_BLACK ? ROLE_BLACK : ROLE_WHITE;
+  c->reached = NEEDS_SEAT;
+  c->room = room;
+}
+
+static ErrorCode seat_joiner(Server *s, Client *c, const Room *r, int room, bool as_spectator) {
+  bool white_free = !has_role(s, room, ROLE_WHITE);
+  bool black_free = !has_role(s, room, ROLE_BLACK);
+
+  if (!as_spectator && (white_free || black_free)) {
+    c->role = white_free ? ROLE_WHITE : ROLE_BLACK;
+    c->reached = NEEDS_SEAT;
+  } else {
+    if (!(r->flags & ROOM_ALLOW_SPECTATORS))
+      return (white_free || black_free) ? ERR_NO_SPECTATORS : ERR_ROOM_FULL;
+    if (count_role(s, room, ROLE_SPECTATOR) >= MAX_SPECTATORS) return ERR_ROOM_FULL;
+
+    c->role = ROLE_SPECTATOR;
+    c->reached = NEEDS_ROOM;
+  }
+  c->room = room;
+  return ERR_NONE;
+}
+
 static void broadcast(Server *s, int room, uint8_t msg_type, const void *msg_buf, uint16_t msg_len) {
   for (int i = 0; i < MAX_CLIENTS; i++) {
     if (s->clients[i].active && s->clients[i].room == room) {
       send_msg(s->clients[i].fd, msg_type, msg_buf, msg_len);
     }
+  }
+}
+
+static void broadcast_except(Server *s, int room, const Client *skip,
+                             uint8_t msg_type, const void *msg_buf, uint16_t msg_len) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    Client *c = &s->clients[i];
+    if (c->active && c->room == room && c != skip)
+      send_msg(c->fd, msg_type, msg_buf, msg_len);
   }
 }
 
@@ -84,6 +139,85 @@ static void maybe_start(Server *s, int room) {
   broadcast_state(s, room);
 }
 
+
+static GameResult handle_create_room(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
+  if (c->room >= 0) return fail(c, ERR_ALREADY_IN_ROOM, MSG_CREATE_ROOM);
+
+  uint8_t flags;
+  char password[PASSWORD_BUF_LEN];
+  if (!decode_create_room(msg_buf, msg_len, &flags, password))
+    return fail(c, ERR_MALFORMED, MSG_CREATE_ROOM);
+
+  Room *r = room_create(&s->room_table, password, flags);
+  if (r == NULL) return fail(c, ERR_TOO_MANY_ROOMS, MSG_CREATE_ROOM);
+
+  seat_creator(c, r, room_index(s, r));
+  send_joined(c->fd, r->id, c->role, NO_TOKEN, r->flags);
+  printf("[%s] created, %s\n", r->id, role_name(c->role));
+  return NO_RESULT;
+}
+
+static GameResult handle_join_room(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
+  if (c->room >= 0)  return fail(c, ERR_ALREADY_IN_ROOM, MSG_JOIN_ROOM);
+
+  char id[ROOM_ID_BUF_LEN], password[PASSWORD_BUF_LEN];
+  uint8_t flags, token[TOKEN_SIZE];
+  if (!decode_join_room(msg_buf, msg_len, id, &flags, password, token))
+    return fail(c, ERR_MALFORMED, MSG_JOIN_ROOM);
+
+  Room *r = room_find(&s->room_table, id);
+  if (r == NULL) return fail(c, ERR_ROOM_NOT_FOUND, MSG_JOIN_ROOM);
+  if (!room_password_ok(r, password)) return fail(c, ERR_BAD_PASSWORD, MSG_JOIN_ROOM);
+
+  int room = room_index(s, r);
+  ErrorCode err = seat_joiner(s, c, r, room, flags & JOIN_AS_SPECTATOR);
+  if (err != ERR_NONE) return fail(c, err, MSG_JOIN_ROOM);
+
+  send_joined(c->fd, r->id, c->role, NO_TOKEN, r->flags);
+
+  uint8_t buf[MAX_PAYLOAD];
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    Client *other = &s->clients[i];
+    if (other->active && other->room == room && other != c)
+      send_msg(c->fd, MSG_PEER_JOINED, buf, encode_peer(buf, other->role));
+  }
+  broadcast_except(s, room, c, MSG_PEER_JOINED, buf, encode_peer(buf, c->role));
+
+  if (r->started) {
+    send_state(c->fd, &r->game);
+    if (r->over) send_game_over(c->fd, r->result);
+  } else {
+    maybe_start(s, room);
+  }
+  printf("[%s] %s joined\n", r->id, role_name(c->role));
+  return NO_RESULT;
+}
+
+static GameResult leave_room(Server *s, Client *c) {
+  int room = c->room;
+  Room *r = &s->room_table.rooms[room];
+  Role role = c->role;
+  bool was_player = role != ROLE_SPECTATOR;
+  bool live = r->started && !r->over;
+
+  c->room = -1;
+  c->reached = NEEDS_HELLO;
+
+  uint8_t buf[MAX_PAYLOAD];
+  broadcast(s, room, MSG_PEER_LEFT, buf, encode_peer(buf, role));
+
+  if (room_empty(s, room)) {
+    printf("[%s] closed\n", r->id);
+    room_free(r);
+    return NO_RESULT;
+  }
+
+  if (live && was_player)
+    return (GameResult){ WIN_FOR(OTHER_COLOR(ROLE_COLOR(role))), REASON_DISCONNECT };
+
+  return NO_RESULT;
+}
+
 static void remove_client(Server *s, int i) {
   close(s->clients[i].fd);
   s->clients[i].active = false;
@@ -93,35 +227,23 @@ static void accept_client(Server *s) {
   int fd = accept_conn(s->listen_fd);
   if (fd < 0) return;
 
-  Role role;
-  if (!has_role(s, 0, ROLE_WHITE))
-    role = ROLE_WHITE;
-  else if (!has_role(s, 0, ROLE_BLACK))
-    role = ROLE_BLACK;
-  else if (count_role(s, 0, ROLE_SPECTATOR) < MAX_SPECTATORS){
-    role = ROLE_SPECTATOR;
-  } else {
-    send_error(fd, ERR_SERVER_FULL, 0);
-    close(fd);
-    return;
-  }
-
   int slot = -1;
   for (int i = 0; i < MAX_CLIENTS && slot < 0; i++) {
     if (!s->clients[i].active) slot = i;
   }
   if (slot < 0) {
+    send_error(fd, ERR_SERVER_FULL, 0);
     close(fd);
     return;
   }
+
   s->clients[slot] = (Client){
     .fd = fd,
-    .role = role,
     .active = true,
     .reached = NEEDS_NOTHING,
-    .room = 0
+    .room = -1
   };
-  printf("[%s] connected\n", role_name(role));
+  printf("connected\n");
 }
 
 static ErrorCode check_msg(const Server *s, const Client *c, const MsgSpec *spec, uint16_t len) {
@@ -147,30 +269,13 @@ static ErrorCode check_msg(const Server *s, const Client *c, const MsgSpec *spec
   return ERR_NONE;
 }
 
-static GameResult fail(Client *c, ErrorCode code, uint8_t context) {
-  send_error(c->fd, code, context);
-  return NO_RESULT;
-}
-
 static GameResult handle_hello(Server *s, Client *c, const uint8_t *msg_buf, uint16_t msg_len) {
   uint16_t version;
   if (!decode_hello(msg_buf, msg_len, &version)) return fail(c, ERR_MALFORMED, MSG_HELLO);
   if (version != PROTO_VERSION) return fail(c, ERR_VERSION_MISMATCH, MSG_HELLO);
 
-  c->reached = c->role == ROLE_SPECTATOR ? NEEDS_ROOM : NEEDS_SEAT;
+  c->reached = NEEDS_HELLO;
   send_hello_ok(c->fd, MAX_SPECTATORS, 0);
-
-  static const uint8_t no_token[TOKEN_SIZE] = {0};
-
-  Room *r = client_room(s, c);
-  send_joined(c->fd, r->id, c->role, no_token, r->flags);
-  
-  if (r->started) {
-    send_state(c->fd, &r->game);
-    if (r->over) send_game_over(c->fd, r->result);
-  } else {
-    maybe_start(s, c->room);
-  }
   return NO_RESULT;
 }
 
@@ -193,16 +298,12 @@ static GameResult handle_resign(Server *s, Client *c) {
 }
 
 static GameResult handle_disconnect(Server *s, int i) {
-  Role role = s->clients[i].role;
-  int room = s->clients[i].room;
-  bool started = s->room_table.rooms[room].started;
+  Client *c = &s->clients[i];
+  GameResult result = (c->room >= 0) ? leave_room(s, c) : NO_RESULT;
+
   remove_client(s, i);
-  printf("[%s] disconnected\n", role_name(role));
-
-  if (started && role != ROLE_SPECTATOR)
-    return (GameResult){ WIN_FOR(OTHER_COLOR(ROLE_COLOR(role))), REASON_DISCONNECT };
-
-  return NO_RESULT;
+  printf("disconnected\n");
+  return result;
 }
 
 static GameResult handle_msg(Server *s, int i) {
@@ -222,6 +323,9 @@ static GameResult handle_msg(Server *s, int i) {
     case MSG_HELLO:  return handle_hello(s, c, msg_buf, msg_len);
     case MSG_MOVE:   return handle_move(s, c, msg_buf, msg_len);
     case MSG_RESIGN: return handle_resign(s, c);
+    case MSG_CREATE_ROOM: return handle_create_room(s, c, msg_buf, msg_len);
+    case MSG_JOIN_ROOM:   return handle_join_room(s, c, msg_buf, msg_len);
+    case MSG_LEAVE_ROOM:  return leave_room(s, c);
     default:         return fail(c, ERR_UNKNOWN_MESSAGE, msg_type);
   }
 }

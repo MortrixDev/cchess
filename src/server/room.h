@@ -26,5 +26,10 @@ typedef struct { Room rooms[MAX_ROOMS]; } RoomTable;
 void room_init(Room *r, const char *id, const char *password, uint8_t flags);
 bool room_start(Room *r);
 bool room_finish(Room *r, GameResult result);
+Room *room_find(RoomTable *t, const char *id);
+void room_free(Room *r);
+Room *room_create(RoomTable *t, const char *password, uint8_t flags);
+bool room_password_ok(const Room *r, const char *attempt);
+bool room_coin_flip(void);
 
 #endif

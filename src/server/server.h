@@ -1,14 +1,12 @@
 #ifndef SERVER_SERVER_H
 #define SERVER_SERVER_H
 
-#include "chess/board.h"
-#include "chess/rules.h"
 #include "proto/proto.h"
 #include "server/room.h"
 
 #include <stdbool.h>
 
-#define MAX_CLIENTS (2 + MAX_SPECTATORS)
+#define MAX_CLIENTS 128
 
 typedef struct {
   int fd;

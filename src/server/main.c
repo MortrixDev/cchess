@@ -11,7 +11,6 @@ int main(void) {
   if (!proto_self_check()) exit(EXIT_FAILURE);
 
   Server s = {0};
-  room_init(&s.room_table.rooms[0], "LOCAL1", "", 0);
 
   // Prevents the program to crash when a player disconnects
   signal(SIGPIPE, SIG_IGN);

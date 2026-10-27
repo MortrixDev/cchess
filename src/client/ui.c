@@ -252,14 +252,21 @@ static const char *result_text(const View *v) {
   return reason ? TextFormat("%s %s", winner, reason) : winner;
 }
 
+// A code this build predates still has to show the user something.
+static const char *error_text(const View *v) {
+  const char *message = error_message(v->error_code);
+  return message ? message : TextFormat("server error (%u)", v->error_code);
+}
+
 static void draw_status(const View *v, Rectangle r) {
   DrawRectangleRec(r, (Color){ 30, 30, 30, 255 });
   const char *text =
-      !v->connected  ? "Disconnected"
-    : v->game_over   ? result_text(v)
-    : !v->joined     ? "Connecting..."
-    : !v->has_state  ? "Waiting for opponent..."
-    : v->spectator   ? (v->game.turn == COLOR_WHITE ? "White to move" : "Black to move")
+      !v->connected       ? "Disconnected"
+    : v->error_code       ? error_text(v)
+    : !v->joined          ? "Connecting..."
+    : v->game_over        ? result_text(v)
+    : !v->has_state       ? TextFormat("Room %s - waiting for opponent", v->room_id)
+    : v->spectator        ? (v->game.turn == COLOR_WHITE ? "White to move" : "Black to move")
     : v->game.turn == v->my_color ? "Your move" : "Opponent's move";
   DrawTextEx(assets.font, text,
              (Vector2){ r.x + 10, r.y + (r.height - STATUS_FONT_SIZE) / 2.0f },
